@@ -1,0 +1,24 @@
+[package]
+name = "lsmdb"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "LSM-tree storage engine: WAL, skiplist memtable, mmap SSTables with bloom filters, leveled compaction, MVCC snapshot isolation"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/monaaoua9/lsmdb"
+
+[dependencies]
+memmap2 = "0.9"
+crc32fast = "1.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
