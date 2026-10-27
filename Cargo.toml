@@ -1,5 +1,5 @@
 [package]
-name = "lsmdb"
+name = "lsmdb-rs"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
@@ -7,6 +7,12 @@ description = "LSM-tree storage engine: WAL, skiplist memtable, mmap SSTables wi
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/monaaoua9/lsmdb"
+keywords = ["lsm-tree", "database", "storage-engine", "key-value", "mvcc"]
+categories = ["database-implementations"]
+exclude = [".github", "bench-data"]
+
+[lib]
+name = "lsmdb"
 
 [dependencies]
 memmap2 = "0.9"
