@@ -1,0 +1,340 @@
+mod background;
+mod iter;
+mod txn;
+mod write;
+
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fs::{self, File},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Condvar, Mutex,
+    },
+    thread::JoinHandle,
+};
+
+use crate::{
+    batch::{replay_record, WriteBatch},
+    error::{Error, Result},
+    filename::{self, FileKind},
+    iter::InternalIterator,
+    memtable::MemTable,
+    metrics::Metrics,
+    options::{Options, WriteOptions},
+    types::{Hit, SeqNo, MAX_SEQ},
+    version::{NewFile, Version, VersionEdit, VersionSet, NUM_LEVELS},
+    wal::{LogReader, LogWriter},
+};
+
+pub use iter::DbIter;
+pub use txn::Transaction;
+use write::Writer;
+
+struct State {
+    mem: Arc<MemTable>,
+    imm: Option<Arc<MemTable>>,
+    // WALs older than this are dead once `imm` is flushed
+    imm_next_log: u64,
+    version: Arc<Version>,
+}
+
+pub(crate) struct DbInner {
+    dir: PathBuf,
+    opts: Options,
+    // lock order: versions -> state. Readers only ever take `state`.
+    state: Mutex<State>,
+    state_cv: Condvar,
+    bg_cv: Condvar,
+    versions: Mutex<VersionSet>,
+    wal: Mutex<LogWriter>,
+    last_seq: AtomicU64,
+    next_file: Arc<AtomicU64>,
+    snapshots: Mutex<BTreeMap<SeqNo, usize>>,
+    queue: Mutex<VecDeque<Arc<Writer>>>,
+    queue_cv: Condvar,
+    compaction_lock: Mutex<()>,
+    shutdown: AtomicBool,
+    bg_error: Mutex<Option<Error>>,
+    metrics: Metrics,
+    lock_file: Mutex<Option<File>>,
+}
+
+pub struct Db {
+    inner: Arc<DbInner>,
+    bg: Mutex<Option<JoinHandle<()>>>,
+}
+
+/// pinned read view; versions visible to it survive compaction until it drops
+pub struct Snapshot {
+    inner: Arc<DbInner>,
+    seq: SeqNo,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Stats {
+    pub files_per_level: Vec<usize>,
+    pub bytes_per_level: Vec<u64>,
+    pub memtable_bytes: usize,
+    pub last_seq: SeqNo,
+    pub bloom_checked: u64,
+    pub bloom_skipped: u64,
+    pub block_reads: u64,
+}
+
+impl Db {
+    pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
+        let dir = path.as_ref().to_path_buf();
+        if opts.create_if_missing {
+            fs::create_dir_all(&dir)?;
+        }
+        let lock = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(filename::lock_path(&dir))?;
+        lock.try_lock().map_err(|_| Error::Locked)?;
+
+        let next_file = Arc::new(AtomicU64::new(2));
+        let mut vs = VersionSet::open(&dir, &opts, next_file.clone())?;
+
+        let mut logs: Vec<u64> = fs::read_dir(&dir)?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| match filename::parse(&e.file_name().to_string_lossy()) {
+                FileKind::Log(n) if n >= vs.log_number() => Some(n),
+                _ => None,
+            })
+            .collect();
+        logs.sort_unstable();
+
+        let mem = MemTable::new();
+        let mut max_seq = vs.last_seq();
+        for n in logs {
+            next_file.fetch_max(n + 1, Ordering::SeqCst);
+            let mut r = LogReader::open(&filename::log_path(&dir, n))?;
+            while let Some(rec) = r.read_record() {
+                let last = replay_record(rec, |seq, kind, k, v| mem.add(seq, kind, k, v))?;
+                max_seq = max_seq.max(last);
+            }
+        }
+
+        // recovered writes go straight to an L0 table so the old logs can be dropped
+        let wal_number = next_file.fetch_add(1, Ordering::SeqCst);
+        let mut edit = VersionEdit { log_number: Some(wal_number), ..Default::default() };
+        if !mem.is_empty() {
+            let number = next_file.fetch_add(1, Ordering::SeqCst);
+            let mut it = mem.iter();
+            it.seek_to_first();
+            let info = background::write_table(&dir, &opts, number, &mut it)?;
+            edit.added.push((
+                0,
+                NewFile { number, size: info.size, smallest: info.smallest, largest: info.largest },
+            ));
+        }
+        let version = vs.log_and_apply(edit, max_seq)?;
+        let wal = LogWriter::create(&filename::log_path(&dir, wal_number))?;
+
+        background::sweep_obsolete(&dir, &vs);
+
+        let inner = Arc::new(DbInner {
+            dir,
+            opts,
+            state: Mutex::new(State { mem: Arc::new(MemTable::new()), imm: None, imm_next_log: 0, version }),
+            state_cv: Condvar::new(),
+            bg_cv: Condvar::new(),
+            versions: Mutex::new(vs),
+            wal: Mutex::new(wal),
+            last_seq: AtomicU64::new(max_seq),
+            next_file,
+            snapshots: Mutex::new(BTreeMap::new()),
+            queue: Mutex::new(VecDeque::new()),
+            queue_cv: Condvar::new(),
+            compaction_lock: Mutex::new(()),
+            shutdown: AtomicBool::new(false),
+            bg_error: Mutex::new(None),
+            metrics: Metrics::default(),
+            lock_file: Mutex::new(Some(lock)),
+        });
+
+        let bg = {
+            let inner = inner.clone();
+            std::thread::Builder::new()
+                .name("lsmdb-bg".into())
+                .spawn(move || inner.bg_loop())
+                .map_err(Error::from)?
+        };
+        Ok(Db { inner, bg: Mutex::new(Some(bg)) })
+    }
+
+    pub fn put(&self, key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Result<()> {
+        let mut b = WriteBatch::new();
+        b.put(key, value);
+        self.write(b, &WriteOptions::default())
+    }
+
+    pub fn delete(&self, key: impl Into<Vec<u8>>) -> Result<()> {
+        let mut b = WriteBatch::new();
+        b.delete(key);
+        self.write(b, &WriteOptions::default())
+    }
+
+    pub fn write(&self, batch: WriteBatch, wo: &WriteOptions) -> Result<()> {
+        batch.validate()?;
+        if batch.is_empty() {
+            return Ok(());
+        }
+        self.inner.submit(Writer::new(batch, wo.sync))
+    }
+
+    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let seq = self.inner.last_seq.load(Ordering::Acquire);
+        Ok(self.inner.get_at(key, seq)?.and_then(|h| h.value))
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        self.inner.acquire_snapshot()
+    }
+
+    /// full scan at the current sequence number
+    pub fn iter(&self) -> Result<DbIter> {
+        self.range(None, None)
+    }
+
+    /// keys in [lower, upper)
+    pub fn range(&self, lower: Option<&[u8]>, upper: Option<&[u8]>) -> Result<DbIter> {
+        self.snapshot().range(lower, upper)
+    }
+
+    pub fn begin(&self) -> Transaction<'_> {
+        Transaction::new(self)
+    }
+
+    /// rotates the memtable and blocks until it is on disk as an L0 table
+    pub fn flush(&self) -> Result<()> {
+        self.inner.flush()
+    }
+
+    /// flushes, then pushes every level down; leaves a single sorted run per level
+    pub fn compact_all(&self) -> Result<()> {
+        self.inner.flush()?;
+        for level in 0..NUM_LEVELS - 1 {
+            self.inner.compact_once(Some(level))?;
+        }
+        Ok(())
+    }
+
+    pub fn stats(&self) -> Stats {
+        let (mem, version) = {
+            let s = self.inner.state.lock().unwrap();
+            (s.mem.approx_bytes(), s.version.clone())
+        };
+        let m = &self.inner.metrics;
+        Stats {
+            files_per_level: (0..NUM_LEVELS).map(|l| version.num_files(l)).collect(),
+            bytes_per_level: (0..NUM_LEVELS).map(|l| version.level_bytes(l)).collect(),
+            memtable_bytes: mem,
+            last_seq: self.inner.last_seq.load(Ordering::Acquire),
+            bloom_checked: m.bloom_checked.load(Ordering::Relaxed),
+            bloom_skipped: m.bloom_skipped.load(Ordering::Relaxed),
+            block_reads: m.block_reads.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl Drop for Db {
+    fn drop(&mut self) {
+        self.inner.shutdown.store(true, Ordering::Release);
+        {
+            let _g = self.inner.state.lock().unwrap();
+            self.inner.bg_cv.notify_all();
+        }
+        if let Some(h) = self.bg.lock().unwrap().take() {
+            let _ = h.join();
+        }
+        // let go of the directory lock even if snapshots keep DbInner alive
+        self.inner.lock_file.lock().unwrap().take();
+    }
+}
+
+impl Snapshot {
+    pub fn seq(&self) -> SeqNo {
+        self.seq
+    }
+
+    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        Ok(self.inner.get_at(key, self.seq)?.and_then(|h| h.value))
+    }
+
+    pub fn range(self, lower: Option<&[u8]>, upper: Option<&[u8]>) -> Result<DbIter> {
+        DbIter::new(self, lower, upper)
+    }
+}
+
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        self.inner.release_snapshot(self.seq);
+    }
+}
+
+impl DbInner {
+    fn acquire_snapshot(self: &Arc<Self>) -> Snapshot {
+        let mut l = self.snapshots.lock().unwrap();
+        let seq = self.last_seq.load(Ordering::Acquire);
+        *l.entry(seq).or_insert(0) += 1;
+        Snapshot { inner: self.clone(), seq }
+    }
+
+    fn release_snapshot(&self, seq: SeqNo) {
+        let mut l = self.snapshots.lock().unwrap();
+        if let Some(c) = l.get_mut(&seq) {
+            *c -= 1;
+            if *c == 0 {
+                l.remove(&seq);
+            }
+        }
+    }
+
+    // compaction may drop anything shadowed at or below this
+    fn oldest_snapshot(&self) -> SeqNo {
+        let l = self.snapshots.lock().unwrap();
+        l.keys().next().copied().unwrap_or_else(|| self.last_seq.load(Ordering::Acquire))
+    }
+
+    fn get_at(&self, key: &[u8], seq: SeqNo) -> Result<Option<Hit>> {
+        // state first, version via the same lock: a flush publishes the new
+        // version and drops `imm` under one lock hold, so we can't miss data
+        let (mem, imm, version) = {
+            let s = self.state.lock().unwrap();
+            (s.mem.clone(), s.imm.clone(), s.version.clone())
+        };
+        if let Some(h) = mem.get(key, seq) {
+            return Ok(Some(h));
+        }
+        if let Some(h) = imm.as_ref().and_then(|m| m.get(key, seq)) {
+            return Ok(Some(h));
+        }
+        version.get(key, seq, &self.metrics)
+    }
+
+    fn latest_seq(&self, key: &[u8]) -> Result<SeqNo> {
+        Ok(self.get_at(key, MAX_SEQ)?.map_or(0, |h| h.seq))
+    }
+
+    fn set_bg_error(&self, e: Error) {
+        let mut slot = self.bg_error.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(e);
+        }
+        drop(slot);
+        let _g = self.state.lock().unwrap();
+        self.state_cv.notify_all();
+    }
+
+    fn check_bg_error(&self) -> Result<()> {
+        match &*self.bg_error.lock().unwrap() {
+            Some(e) => Err(Error::Poisoned(e.to_string())),
+            None => Ok(()),
+        }
+    }
+}
