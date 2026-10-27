@@ -4,7 +4,7 @@ use memmap2::Mmap;
 
 use super::{
     block::{Backing, Block, BlockIter},
-    format::{BlockHandle, Footer, BLOCK_TRAILER, FOOTER_LEN},
+    format::{BlockHandle, Footer, BLOCK_LZ4, BLOCK_RAW, BLOCK_TRAILER, FOOTER_LEN},
 };
 use crate::{
     bloom,
@@ -14,6 +14,8 @@ use crate::{
     metrics::Metrics,
     types::{parse_ikey, Hit, ValueKind},
 };
+
+const MAX_BLOCK: usize = 256 << 20;
 
 /// Immutable SSTable served straight out of an mmap: blocks are slices of
 /// the mapping, so a read costs a page fault at worst and no copy into a
@@ -114,7 +116,23 @@ fn read_block(backing: &Backing, len: usize, verify: bool, h: BlockHandle) -> Re
     let raw: &dyn AsRef<[u8]> = &**backing;
     check_region(raw.as_ref(), len, verify, h)?;
     let off = h.offset as usize;
-    Block::new(backing.clone(), off, off + h.size as usize)
+    let end = off + h.size as usize;
+    match raw.as_ref()[end] {
+        BLOCK_RAW => Block::new(backing.clone(), off, end),
+        BLOCK_LZ4 => {
+            let src = &raw.as_ref()[off..end];
+            // size prefix is covered by the crc, but verify_checksums can be off
+            let want = src.get(..4).map(read_fixed32).ok_or_else(|| Error::corruption("short lz4 block"))?;
+            if want as usize > MAX_BLOCK {
+                return Err(Error::corruption("absurd lz4 block size"));
+            }
+            let plain = lz4_flex::block::decompress_size_prepended(src)
+                .map_err(|e| Error::corruption(format!("lz4: {e}")))?;
+            let n = plain.len();
+            Block::new(Arc::new(plain), 0, n)
+        }
+        t => Err(Error::corruption(format!("unknown block type {t}"))),
+    }
 }
 
 pub struct TableIterator {

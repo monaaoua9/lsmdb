@@ -1,6 +1,6 @@
 # lsmdb architecture
 
-An embedded LSM-tree key-value store in Rust (~3k lines, two small dependencies: `memmap2`, `crc32fast`).
+An embedded LSM-tree key-value store in Rust (~3k lines, three small dependencies: `memmap2`, `crc32fast`, `lz4_flex`).
 
 ```
  put/delete/WriteBatch/Transaction.commit
@@ -46,7 +46,7 @@ No lock is held while touching data. Writers never block readers.
 | Internal key | `types.rs` | `user_key ‖ le64(seq<<8 \| kind)`; order = key asc, seq desc, so the newest visible version is the first one a seek lands on |
 | MemTable | `memtable/skiplist.rs` | Lock-free multi-writer skiplist (CAS per level, level 0 first). Nodes are never unlinked, so published pointers stay valid until the list is dropped, which is what makes the `unsafe` small and local. Iterators hold an `Arc` to the list |
 | WAL | `wal.rs` | `masked crc32 ‖ len ‖ payload`. Replay stops at the first bad/short record (point-in-time recovery: you get a prefix of the acknowledged history) |
-| SSTable | `sstable/*` | `[data blocks][bloom][index][footer]`. Data blocks use prefix compression with restart points every 16 keys; each block has a 5-byte trailer (type + masked CRC). Index has one entry per block (its last key) with restart interval 1, i.e. a pure binary search. Bloom is keyed on user key (10 bits/key ≈ 1% FPR) |
+| SSTable | `sstable/*` | `[data blocks][bloom][index][footer]`. Data blocks use prefix compression with restart points every 16 keys; each block has a 5-byte trailer (type + masked CRC). Data blocks are LZ4-compressed (`Options::compression`, default on) and kept raw when LZ4 saves less than 1/8; the filter and index blocks are always raw. Compressed blocks are decompressed into a heap buffer on read, so they lose the zero-copy mmap path that raw blocks keep. Index has one entry per block (its last key) with restart interval 1, i.e. a pure binary search. Bloom is keyed on user key (10 bits/key ≈ 1% FPR) |
 | mmap reads | `sstable/reader.rs` | Tables are mapped read-only; blocks are slices of the mapping, so no copy into user space and the OS page cache is the block cache. CRC verified on every block read (configurable) |
 | Manifest | `version/*` | Log of `VersionEdit`s (add/delete file, log number, next file, last seq), same record format as the WAL. A fresh snapshot manifest is written on every open and `CURRENT` is flipped by write-tmp + fsync + rename |
 | Compaction | `compaction.rs`, `db/background.rs` | Leveled. L0→L1 when ≥4 files; Ln→Ln+1 when a level exceeds `base × 10^(n-1)` (round-robin file pick). Trivial moves when a file overlaps nothing below. One background thread does flushes first, then compactions |
@@ -85,7 +85,7 @@ A WAL append/fsync failure puts the database in a poisoned, read-only state (`Er
 
 ## Honest limitations
 
-* No compression, no rate limiter, no column families, no merge operators.
+* LZ4 only (no zstd/snappy), no rate limiter, no column families, no merge operators.
 * Single background thread (flush and compaction are serialized).
 * No explicit block cache (relies on the OS page cache through mmap); `O_DIRECT` isn't used because it fights mmap and the page cache that serves the read path.
 * Isolation is SI, not serializable (write skew is possible unless you use `get_for_update`).

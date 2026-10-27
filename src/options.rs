@@ -1,3 +1,9 @@
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compression {
+    None,
+    Lz4,
+}
+
 #[derive(Clone, Debug)]
 pub struct Options {
     pub create_if_missing: bool,
@@ -9,6 +15,8 @@ pub struct Options {
     pub block_restart_interval: usize,
     /// 0 disables bloom filters
     pub bloom_bits_per_key: usize,
+    /// applies to data blocks of newly written tables; readers handle both
+    pub compression: Compression,
     pub l0_compaction_trigger: usize,
     pub l0_slowdown_trigger: usize,
     pub l0_stop_trigger: usize,
@@ -28,6 +36,7 @@ impl Default for Options {
             block_size: 4096,
             block_restart_interval: 16,
             bloom_bits_per_key: 10,
+            compression: Compression::Lz4,
             l0_compaction_trigger: 4,
             l0_slowdown_trigger: 8,
             l0_stop_trigger: 12,

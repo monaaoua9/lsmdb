@@ -2,13 +2,13 @@
 
 [![ci](https://github.com/monaaoua9/lsmdb/actions/workflows/ci.yml/badge.svg)](https://github.com/monaaoua9/lsmdb/actions)
 
-Embedded LSM-tree storage engine in Rust. Group-committed WAL, lock-free skiplist memtable, mmap'd SSTables with bloom filters and sparse indexes, background leveled compaction, MVCC snapshots and snapshot-isolation transactions. Two dependencies (`memmap2`, `crc32fast`).
+Embedded LSM-tree storage engine in Rust. Group-committed WAL, lock-free skiplist memtable, mmap'd SSTables with bloom filters and sparse indexes, background leveled compaction, MVCC snapshots and snapshot-isolation transactions. Three small dependencies (`memmap2`, `crc32fast`, `lz4_flex`).
 
 ## Features
 
 - **Durability**: write-ahead log with CRC per record, one `fdatasync` per group of concurrent writers, prefix recovery after a crash or torn write.
 - **Concurrency**: multi-writer lock-free memtable; readers never block on writers.
-- **Reads**: prefix-compressed blocks, per-file bloom filter, binary search over a sparse block index, tables read through `mmap`.
+- **Reads**: prefix-compressed and LZ4-compressed blocks, per-file bloom filter, binary search over a sparse block index, tables read through `mmap`.
 - **Compaction**: leveled (L0 to L6), trivial moves, duplicate and tombstone removal that respects live snapshots.
 - **MVCC**: cheap snapshots and range iterators; transactions with first-committer-wins conflict detection (`get_for_update` to avoid write skew).
 - **Safety**: manifest with atomic `CURRENT` switch, directory lock, orphan-file sweep on open, DB goes read-only (`Error::Poisoned`) if the WAL or a background job fails.
@@ -85,7 +85,7 @@ Design, on-disk formats, lock ordering, recovery and failure handling: [docs/ARC
 
 ## Limitations
 
-No compression, no standalone block cache (the OS page cache serves mmap reads), one background thread, snapshot isolation rather than serializable, no directory fsync on Windows. Developed and tested on Windows; CI also covers Linux and macOS.
+LZ4 is the only codec, no standalone block cache (the OS page cache serves mmap reads), one background thread, snapshot isolation rather than serializable, no directory fsync on Windows. Developed and tested on Windows; CI also covers Linux and macOS.
 
 ## License
 

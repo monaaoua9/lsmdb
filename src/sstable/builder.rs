@@ -6,13 +6,13 @@ use std::{
 
 use super::{
     block::BlockBuilder,
-    format::{BlockHandle, Footer},
+    format::{BlockHandle, Footer, BLOCK_LZ4, BLOCK_RAW},
 };
 use crate::{
     bloom::BloomBuilder,
     coding::{crc_masked, put_fixed32},
     error::Result,
-    options::Options,
+    options::{Compression, Options},
     types::user_key,
 };
 
@@ -30,16 +30,17 @@ pub struct TableBuilder {
     index: BlockBuilder,
     bloom: BloomBuilder,
     block_size: usize,
+    compression: Compression,
     bits_per_key: usize,
     smallest: Vec<u8>,
     last_key: Vec<u8>,
     entries: u64,
 }
 
-fn write_block(file: &mut BufWriter<File>, offset: &mut u64, data: &[u8]) -> Result<BlockHandle> {
+fn write_block(file: &mut BufWriter<File>, offset: &mut u64, data: &[u8], kind: u8) -> Result<BlockHandle> {
     let handle = BlockHandle { offset: *offset, size: data.len() as u64 };
     let mut trailer = Vec::with_capacity(5);
-    trailer.push(0u8);
+    trailer.push(kind);
     let crc = crc_masked(&[data, &trailer]);
     put_fixed32(&mut trailer, crc);
     file.write_all(data)?;
@@ -60,6 +61,7 @@ impl TableBuilder {
             index: BlockBuilder::new(1),
             bloom: BloomBuilder::default(),
             block_size: opts.block_size,
+            compression: opts.compression,
             bits_per_key: opts.bloom_bits_per_key,
             smallest: Vec::new(),
             last_key: Vec::new(),
@@ -97,7 +99,19 @@ impl TableBuilder {
         if self.data.is_empty() {
             return Ok(());
         }
-        let h = write_block(&mut self.file, &mut self.offset, self.data.finish())?;
+        let raw = self.data.finish();
+        let h = match self.compression {
+            Compression::Lz4 => {
+                let packed = lz4_flex::block::compress_prepend_size(raw);
+                // not worth the decode cost unless it saves at least 1/8
+                if packed.len() < raw.len() - raw.len() / 8 {
+                    write_block(&mut self.file, &mut self.offset, &packed, BLOCK_LZ4)?
+                } else {
+                    write_block(&mut self.file, &mut self.offset, raw, BLOCK_RAW)?
+                }
+            }
+            Compression::None => write_block(&mut self.file, &mut self.offset, raw, BLOCK_RAW)?,
+        };
         self.data.reset();
         let mut enc = Vec::new();
         h.encode(&mut enc);
@@ -109,8 +123,8 @@ impl TableBuilder {
     pub fn finish(mut self) -> Result<TableInfo> {
         self.flush_data()?;
         let filter = self.bloom.finish(self.bits_per_key);
-        let filter_h = write_block(&mut self.file, &mut self.offset, &filter)?;
-        let index_h = write_block(&mut self.file, &mut self.offset, self.index.finish())?;
+        let filter_h = write_block(&mut self.file, &mut self.offset, &filter, BLOCK_RAW)?;
+        let index_h = write_block(&mut self.file, &mut self.offset, self.index.finish(), BLOCK_RAW)?;
         let footer = Footer { filter: filter_h, index: index_h, num_entries: self.entries };
         self.file.write_all(&footer.encode())?;
         self.offset += super::format::FOOTER_LEN as u64;

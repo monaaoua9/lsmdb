@@ -5,8 +5,10 @@ use crate::{
 
 // "LSMDB001"
 pub const MAGIC: u64 = 0x4c53_4d44_4230_3031;
-// compression byte (always 0 for now) + masked crc32 of data++type
+// compression byte + masked crc32 of data++type
 pub const BLOCK_TRAILER: usize = 5;
+pub const BLOCK_RAW: u8 = 0;
+pub const BLOCK_LZ4: u8 = 1;
 pub const FOOTER_LEN: usize = 48;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

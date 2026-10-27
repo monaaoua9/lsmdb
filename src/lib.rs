@@ -25,4 +25,4 @@ mod wal;
 pub use batch::WriteBatch;
 pub use db::{Db, DbIter, Snapshot, Stats, Transaction};
 pub use error::{Error, Result};
-pub use options::{Options, WriteOptions};
+pub use options::{Compression, Options, WriteOptions};
