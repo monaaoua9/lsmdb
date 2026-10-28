@@ -97,6 +97,16 @@ impl Db {
         lock.try_lock().map_err(|_| Error::Locked)?;
 
         let next_file = Arc::new(AtomicU64::new(2));
+        // the manifest's counter can lag behind files a crashed run created afterwards
+        // (rotated wal, half-written table); never reuse a number that is already on disk
+        for e in fs::read_dir(&dir)?.filter_map(|e| e.ok()) {
+            match filename::parse(&e.file_name().to_string_lossy()) {
+                FileKind::Log(n) | FileKind::Table(n) | FileKind::Manifest(n) => {
+                    next_file.fetch_max(n + 1, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+        }
         let mut vs = VersionSet::open(&dir, &opts, next_file.clone())?;
 
         let mut logs: Vec<u64> = fs::read_dir(&dir)?

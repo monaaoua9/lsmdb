@@ -20,6 +20,9 @@ pub struct LogWriter {
 impl LogWriter {
     pub fn create(path: &Path) -> Result<Self> {
         let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        if let Some(dir) = path.parent() {
+            crate::filename::sync_dir(dir)?;
+        }
         Ok(LogWriter { file, scratch: Vec::new() })
     }
 

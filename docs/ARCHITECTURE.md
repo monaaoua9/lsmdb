@@ -68,7 +68,7 @@ No lock is held while touching data. Writers never block readers.
 
 ## Recovery
 
-1. Lock the directory (`LOCK`, exclusive).
+1. Lock the directory (`LOCK`, exclusive), then start the file-number counter above every numbered file already on disk (the manifest's counter can lag behind files a crashed run created, e.g. a rotated WAL or a half-written table).
 2. Replay `CURRENT` → manifest to rebuild levels, `log_number`, `last_seq`.
 3. Replay every WAL ≥ `log_number` into a memtable; a torn tail record is dropped.
 4. Flush the recovered memtable straight to an L0 table, record the new `log_number` in the manifest, open a fresh WAL.
@@ -81,6 +81,9 @@ A WAL append/fsync failure puts the database in a poisoned, read-only state (`Er
 ## Tests
 
 * Unit: skiplist (including 8-thread concurrent insert, reader/writer race), block builder/iterator, bloom FPR, WAL torn-tail and bit-flip, varints, manifest edits.
+* Crash (`tests/crash.rs`): the test binary re-executes itself as a writer that prints each acknowledged key, the parent `kill`s it at a random moment, reopens, and checks that every acknowledged write survived (sync mode), that the recovered data is a gap-free prefix, and that two-key batches are atomic. Repeated over a dozen kill/recover cycles per run. This is process death, not power loss.
+* Fuzz (`tests/fuzz.rs`): flips bits, truncates, overwrites and appends garbage in random files (WAL, tables, manifest, CURRENT) of a healthy db, then opens, reads, scans and compacts; nothing may panic.
+* Miri: the skiplist (the only module with real `unsafe` aliasing) is run under Miri in CI.
 * Integration (`tests/`): CRUD, scans, bloom effectiveness, reopen cycles, torn/corrupt WAL, corrupt SSTable, orphan sweep, snapshot isolation across flush+compaction, transaction conflicts, write skew, lost-update counter under contention, randomized model check against a `BTreeMap` with flushes/compactions/reopens, write-stall liveness.
 
 ## Honest limitations
@@ -90,4 +93,4 @@ A WAL append/fsync failure puts the database in a poisoned, read-only state (`Er
 * No explicit block cache (relies on the OS page cache through mmap); `O_DIRECT` isn't used because it fights mmap and the page cache that serves the read path.
 * Isolation is SI, not serializable (write skew is possible unless you use `get_for_update`).
 * The manifest is compacted by rewrite on open, not while running.
-* Developed and tested on Windows; directory fsync after file creation is not performed there (it is not possible with std on Windows) and would be needed on Unix for strict power-loss guarantees.
+* Directory fsync after creating files and renaming `CURRENT` is done on Unix; on Windows it is skipped (std can't open directories there). Crash tests kill the process; real power-loss behaviour of the filesystem is not simulated.

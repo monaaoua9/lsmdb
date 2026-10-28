@@ -51,6 +51,10 @@ cargo test --release                         # unit + integration + recovery + s
 cargo run --release --example bench -- 500000
 ```
 
+## Testing
+
+`cargo test --release` runs unit tests, integration tests, a randomized model check against a `BTreeMap`, a crash test that `kill`s a writer process at random moments and verifies recovery, and a fuzz test that corrupts random bytes in every kind of file. CI runs it on Linux, macOS and Windows.
+
 ## Numbers
 
 300k keys, 100 B values, Windows 11 laptop, release build:

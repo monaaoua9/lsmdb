@@ -245,7 +245,8 @@ mod tests {
     fn concurrent_inserts_lose_nothing() {
         let l = Arc::new(SkipList::new());
         let threads = 8u32;
-        let per = 5_000u32;
+        // miri is ~1000x slower
+        let per = if cfg!(miri) { 20 } else { 5_000u32 };
         let hs: Vec<_> = (0..threads)
             .map(|t| {
                 let l = l.clone();
@@ -277,10 +278,11 @@ mod tests {
     #[test]
     fn readers_race_with_writer() {
         let l = Arc::new(SkipList::new());
+        let n = if cfg!(miri) { 100 } else { 20_000 };
         let w = {
             let l = l.clone();
             thread::spawn(move || {
-                for i in 0..20_000 {
+                for i in 0..n {
                     l.insert(ik(i, 1), Box::new([]));
                 }
             })
@@ -288,7 +290,7 @@ mod tests {
         let r = {
             let l = l.clone();
             thread::spawn(move || {
-                for i in 0..20_000 {
+                for i in 0..n {
                     let _ = l.seek_ge(&ik(i, 1));
                 }
             })

@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 pub enum FileKind {
     Log(u64),
@@ -42,4 +45,16 @@ pub fn parse(name: &str) -> FileKind {
         return n.parse().map(FileKind::Log).unwrap_or(FileKind::Other);
     }
     FileKind::Other
+}
+
+// new directory entries are only durable after the parent dir is fsynced.
+// std can't open a directory on windows, where NTFS journals metadata anyway
+pub fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    return std::fs::File::open(dir)?.sync_all();
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
 }

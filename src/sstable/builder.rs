@@ -130,6 +130,9 @@ impl TableBuilder {
         self.offset += super::format::FOOTER_LEN as u64;
         self.file.flush()?;
         self.file.get_ref().sync_all()?;
+        if let Some(dir) = self.path.parent() {
+            crate::filename::sync_dir(dir)?;
+        }
         Ok(TableInfo { size: self.offset, smallest: self.smallest, largest: self.last_key })
     }
 

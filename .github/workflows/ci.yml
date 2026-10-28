@@ -15,3 +15,13 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --release
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      # skiplist is the unsafe-heavy part; bloom/wal tests are too slow or hit the fs
+      - run: cargo miri test --lib -- memtable sstable::block coding batch

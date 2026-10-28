@@ -12,7 +12,7 @@ use std::{
 use super::{FileMeta, NewFile, Version, VersionEdit, NUM_LEVELS};
 use crate::{
     error::{Error, Result},
-    filename::{current_path, manifest_name, table_path},
+    filename::{current_path, manifest_name, sync_dir, table_path},
     options::Options,
     types::cmp_ikey,
     wal::{LogReader, LogWriter},
@@ -140,6 +140,7 @@ impl VersionSet {
         f.sync_all()?;
         drop(f);
         fs::rename(&tmp, current_path(dir))?;
+        sync_dir(dir)?;
         Ok(w)
     }
 
