@@ -87,7 +87,7 @@ docs/DESIGN.md
 docs/BENCHMARKS.md
 ```
 
-Design, on-disk formats, lock ordering, recovery and failure handling: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Design, on-disk formats, lock ordering, recovery and failure handling: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The reasoning behind the main choices is shorter and lives in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Limitations
 
