@@ -57,15 +57,15 @@ cargo run --release --example bench -- 500000
 
 ## Numbers
 
-200k keys, 100 B values, i5-8365U laptop, Windows 11, release build:
+200k keys, 100 B values, i5-8365U laptop, Windows 11, release build. Median of three runs:
 
 | workload | ops/s |
 |---|---|
-| fill, batches of 100, no sync | ~344K |
-| random read, hits | ~231K |
-| random read, misses (bloom) | ~1.4M |
-| full scan | ~3.4M |
-| 8 writers, fsync every group | ~3.5K (fsync-bound on Windows) |
+| fill, batches of 100, no sync | ~165K |
+| random read, hits | ~187K |
+| random read, misses (bloom) | ~1.1M |
+| full scan | ~1.8M |
+| 8 writers, fsync every group | ~4.1K (fsync-bound on Windows) |
 
 Treat these as a sanity check, not a benchmark against other engines. Method, caveats and the other workloads are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
