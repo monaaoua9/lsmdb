@@ -57,15 +57,15 @@ cargo run --release --example bench -- 500000
 
 ## Numbers
 
-300k keys, 100 B values, Windows 11 laptop, release build:
+200k keys, 100 B values, i5-8365U laptop, Windows 11, release build:
 
 | workload | ops/s |
 |---|---|
-| fill, batches of 100, no sync | ~100K |
-| random read, hits | ~108K |
-| random read, misses (bloom) | ~574K |
-| full scan | ~1.3M |
-| 8 writers, fsync every group | ~3.7K (fsync-bound on Windows) |
+| fill, batches of 100, no sync | ~344K |
+| random read, hits | ~231K |
+| random read, misses (bloom) | ~1.4M |
+| full scan | ~3.4M |
+| 8 writers, fsync every group | ~3.5K (fsync-bound on Windows) |
 
 Treat these as a sanity check, not a benchmark against other engines.
 
