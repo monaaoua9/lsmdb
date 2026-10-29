@@ -67,7 +67,7 @@ cargo run --release --example bench -- 500000
 | full scan | ~1.8M |
 | 8 writers, fsync every group | ~4.1K (fsync-bound on Windows) |
 
-Treat these as a sanity check, not a benchmark against other engines. Method, caveats and the other workloads are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+These move a lot between runs on a laptop (the scan row ranged from 1.1M to 2.4M), so treat them as a sanity check, not a benchmark against other engines. Method, caveats and the other workloads are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Layout
 
