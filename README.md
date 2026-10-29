@@ -83,6 +83,8 @@ src/
 tests/           integration, recovery, MVCC, randomized model check
 examples/bench.rs
 docs/ARCHITECTURE.md
+docs/DESIGN.md
+docs/BENCHMARKS.md
 ```
 
 Design, on-disk formats, lock ordering, recovery and failure handling: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
