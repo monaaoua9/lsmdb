@@ -48,7 +48,9 @@ pub struct Options {
     pub bloom_bits_per_key: usize,
     /// applies to data blocks of newly written tables; readers handle both
     pub compression: Compression,
-    /// bytes of decompressed blocks kept in memory; 0 disables the cache
+    /// bytes of decompressed blocks kept in memory; 0 (default) disables the cache.
+    /// only pays off when it can hold the hot set: 8 MiB over a ~25 MB table was
+    /// slower than no cache in the bench, 64 MiB was faster
     pub block_cache_bytes: usize,
     pub l0_compaction_trigger: usize,
     pub l0_slowdown_trigger: usize,
@@ -72,7 +74,7 @@ impl Default for Options {
             block_restart_interval: 16,
             bloom_bits_per_key: 10,
             compression: Compression::Lz4,
-            block_cache_bytes: 8 << 20,
+            block_cache_bytes: 0,
             l0_compaction_trigger: 4,
             l0_slowdown_trigger: 8,
             l0_stop_trigger: 12,

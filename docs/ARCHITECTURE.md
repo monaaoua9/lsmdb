@@ -98,7 +98,7 @@ A WAL append/fsync failure puts the database in a poisoned, read-only state (`Er
 ## Later additions
 
 * **Reverse iteration.** Every `InternalIterator` has `seek_to_last`/`prev`. Blocks step back by jumping to the restart point before the current entry and scanning forward; the skiplist uses `find_lt`; `MergingIterator` re-seeks the other children when the direction flips. `DbIter` walks versions of a key oldest-first in reverse mode, so each visible entry overwrites the last one and a tombstone clears the candidate.
-* **Block cache.** Only LZ4 blocks need it (raw blocks are mmap slices). 16-shard LRU keyed by (table id, offset), budget from `Options::block_cache_bytes`.
+* **Block cache.** Only LZ4 blocks need it (raw blocks are mmap slices). 16-shard LRU keyed by (table id, offset), budget from `Options::block_cache_bytes` (default 0 = off: a cache smaller than the hot set costs more than the LZ4 decompression it saves, see BENCHMARKS.md).
 * **Compaction filter.** A put the filter removes becomes a tombstone unless no deeper level can hold the key. The filter is skipped while any snapshot is open, and trivial moves are disabled when one is configured so every table is seen once.
 * **TtlDb.** Values carry an 8 byte deadline; reads hide expired entries, a compaction filter reclaims them.
 * **Checkpoint.** Flush, then under the compaction lock hard-link live tables and write a fresh single-record manifest into the target directory.

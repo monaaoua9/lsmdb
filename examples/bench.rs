@@ -38,7 +38,11 @@ fn main() {
     let value = vec![b'v'; 100];
     println!("lsmdb bench: {n} keys, 16B-ish keys, 100B values\n");
 
-    let opts = Options { write_buffer_size: 32 << 20, ..Options::default() };
+    let cache: usize = env::var("BENCH_CACHE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(Options::default().block_cache_bytes);
+    let opts = Options { write_buffer_size: 32 << 20, block_cache_bytes: cache, ..Options::default() };
     let db = Arc::new(fresh(&dir, opts.clone()));
 
     let wo = WriteOptions { sync: false };
