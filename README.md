@@ -78,17 +78,19 @@ cargo run --release --example bench -- 500000
 
 ## Numbers
 
-200k keys, 100 B values, i5-8365U laptop, Windows 11, release build. Median of three runs:
+Old build (0.1.1, before the later features) against 0.2.0, same bench, same session, run alternately five times each. 200k keys, 100 B values. Median ops/s, ratio is new / old:
 
-| workload | ops/s |
-|---|---|
-| fill, batches of 100, no sync | ~165K |
-| random read, hits | ~187K |
-| random read, misses (bloom) | ~1.1M |
-| full scan | ~1.8M |
-| 8 writers, fsync every group | ~4.1K (fsync-bound on Windows) |
+| workload | 0.1.1 | 0.2.0 | ratio |
+|---|---:|---:|---:|
+| fill, batches of 100, no sync | 340K | 359K | 1.06 |
+| random read, hits | 278K | 260K | 0.93 |
+| random read, misses (bloom) | 1.67M | 1.69M | 1.01 |
+| full scan | 3.3M | 3.1M | 0.93 |
+| 8 writers, fsync | 3.4K | 3.4K | 1.02 |
 
-These move a lot between runs on a laptop (the scan row ranged from 1.1M to 2.4M), so treat them as a sanity check, not a benchmark against other engines. Method, caveats and the other workloads are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Read hits and scans look about 7% slower in 0.2.0, and the ranges of the five runs don't overlap for hits, so I don't think that one is pure noise. I haven't tracked down the cause.
+
+The machine is a weak i5-8365U laptop with 8 GB, several terminals open and an almost full disk, so timings swing a lot (the same build gave 165K fill in an earlier session and 340K in this one). Only compare numbers from the same sitting; the absolute values here are a sanity check, not a benchmark against other engines. Method and all workloads are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Layout
 
