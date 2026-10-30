@@ -410,6 +410,22 @@ impl Db {
         }
     }
 
+    /// adds `delta` to a counter stored as 8 little-endian bytes (absent = 0) and
+    /// returns the new value. safe under concurrent callers
+    pub fn increment(&self, key: &[u8], delta: i64) -> Result<i64> {
+        self.transact(usize::MAX, |tx| {
+            let cur = match tx.get_for_update(key)? {
+                None => 0,
+                Some(v) => i64::from_le_bytes(
+                    v.as_slice().try_into().map_err(|_| Error::invalid("value is not an 8 byte counter"))?,
+                ),
+            };
+            let next = cur.wrapping_add(delta);
+            tx.put(key, next.to_le_bytes().to_vec());
+            Ok(next)
+        })
+    }
+
     /// sets `key` to `new` (None deletes) only if it currently holds `expected`
     /// (None = absent). false means the value differed or lost a race
     pub fn compare_and_swap(

@@ -114,3 +114,28 @@ fn txn_range_overlays_local_writes() {
     tx.rollback();
     assert_eq!(db.get(&key(3)).unwrap().unwrap(), b"base");
 }
+
+#[test]
+fn increment_counts_under_contention() {
+    let d = tempfile::tempdir().unwrap();
+    let db = Arc::new(open(d.path()));
+    assert_eq!(db.increment(b"c", 5).unwrap(), 5);
+    let hs: Vec<_> = (0..4)
+        .map(|_| {
+            let db = db.clone();
+            thread::spawn(move || {
+                for _ in 0..100 {
+                    db.increment(b"c", 1).unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in hs {
+        h.join().unwrap();
+    }
+    assert_eq!(db.increment(b"c", -5).unwrap(), 400);
+    assert_eq!(db.increment(b"fresh", -2).unwrap(), -2);
+
+    db.put("text", "not a counter").unwrap();
+    assert!(matches!(db.increment(b"text", 1), Err(lsmdb::Error::InvalidArgument(_))));
+}
