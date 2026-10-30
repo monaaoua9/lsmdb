@@ -235,8 +235,15 @@ impl Db {
 
     fn open_read_only(dir: PathBuf, opts: Options) -> Result<Db> {
         // shared, so several readers can coexist while a writer is locked out
-        let lock = File::open(filename::lock_path(&dir))?;
-        lock.try_lock_shared().map_err(|_| Error::Locked)?;
+        // checkpoints have no LOCK file and we must not create one
+        let lock = match File::open(filename::lock_path(&dir)) {
+            Ok(f) => {
+                f.try_lock_shared().map_err(|_| Error::Locked)?;
+                Some(f)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
 
         let next_file = Arc::new(AtomicU64::new(2));
         let cache = (opts.block_cache_bytes > 0).then(|| Arc::new(BlockCache::new(opts.block_cache_bytes)));
@@ -280,7 +287,7 @@ impl Db {
             bg_error: Mutex::new(None),
             metrics: Metrics::default(),
             cache,
-            lock_file: Mutex::new(Some(lock)),
+            lock_file: Mutex::new(lock),
         });
         Ok(Db { inner, bg: Mutex::new(None) })
     }
