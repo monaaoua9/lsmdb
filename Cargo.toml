@@ -1,6 +1,6 @@
 [package]
 name = "lsmdb-rs"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
 description = "LSM-tree storage engine: WAL, skiplist memtable, mmap SSTables with bloom filters, leveled compaction, MVCC snapshot isolation"

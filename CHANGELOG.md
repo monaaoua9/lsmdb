@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Breaking: `Options` has new fields (use `..Options::default()`) and `Error` has a new `ReadOnly` variant.
 
 - Reverse iteration (`retreat`, `seek_to_last`, `seek_for_prev`, `rev`, `last_key_value`)
 - Prefix scans, `DbIter::seek`, `delete_range`, `delete_prefix`, `get_many`, `contains_key`

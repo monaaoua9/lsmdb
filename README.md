@@ -20,7 +20,7 @@ Embedded LSM-tree storage engine in Rust. Group-committed WAL, lock-free skiplis
 
 ```toml
 [dependencies]
-lsmdb-rs = "0.1"
+lsmdb-rs = "0.2"
 ```
 
 ```rust
