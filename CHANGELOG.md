@@ -10,4 +10,4 @@
 - Compaction filter, `TtlDb`, buckets
 - Read-only open (`Options::read_only`, `Error::ReadOnly`)
 - More counters in `Stats`; `Options::validate` runs on open
-- `lsmcli` example
+- `lsmcli` and `server` (TCP line protocol) examples
