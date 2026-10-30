@@ -159,7 +159,7 @@ fn corrupt_readonly_and_checkpoint_never_panic() {
     let cp_dir = cp.path().join("cp");
     open(base.path()).checkpoint(&cp_dir).unwrap();
 
-    let mut rng = Rng(0xc0ffee_77);
+    let mut rng = Rng(0xc0ff_ee77);
     for src in [base.path(), cp_dir.as_path()] {
         let files: Vec<PathBuf> = fs::read_dir(src)
             .unwrap()

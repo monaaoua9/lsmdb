@@ -112,7 +112,7 @@ const CP_CHILD: &str = "LSMDB_CP_CHILD_DIR";
 fn cp_child_entry() {
     let Ok(dir) = env::var(CP_CHILD) else { return };
     let db = Db::open(Path::new(&dir).join("db"), small_opts()).unwrap();
-    for n in 0u32.. {
+    for n in 0..u32::MAX {
         for i in 0..200 {
             db.put(key(n * 200 + i), val(i, n)).unwrap();
         }
@@ -123,7 +123,7 @@ fn cp_child_entry() {
 #[test]
 fn kill_during_checkpoints() {
     let d = tempfile::tempdir().unwrap();
-    let mut rng = Rng(0xcb_5eed);
+    let mut rng = Rng(0xcb5e_ed00);
     for _ in 0..6 {
         let mut child = Command::new(env::current_exe().unwrap())
             .args(["--exact", "cp_child_entry", "--nocapture", "--test-threads=1"])
