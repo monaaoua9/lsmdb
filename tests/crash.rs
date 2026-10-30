@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use lsmdb::{Db, WriteBatch, WriteOptions};
 use std::{
-    env,
+    env, fs,
     io::{BufRead, BufReader, Write},
     path::Path,
     process::{Command, Stdio},
@@ -104,4 +104,57 @@ fn crash_recovery_sync() {
 fn crash_recovery_nosync() {
     // process kill (not power loss): the OS still has the written pages
     rounds(false, 8);
+}
+
+const CP_CHILD: &str = "LSMDB_CP_CHILD_DIR";
+
+#[test]
+fn cp_child_entry() {
+    let Ok(dir) = env::var(CP_CHILD) else { return };
+    let db = Db::open(Path::new(&dir).join("db"), small_opts()).unwrap();
+    for n in 0u32.. {
+        for i in 0..200 {
+            db.put(key(n * 200 + i), val(i, n)).unwrap();
+        }
+        let _ = db.checkpoint(Path::new(&dir).join(format!("cp-{n}")));
+    }
+}
+
+#[test]
+fn kill_during_checkpoints() {
+    let d = tempfile::tempdir().unwrap();
+    let mut rng = Rng(0xcb_5eed);
+    for _ in 0..6 {
+        let mut child = Command::new(env::current_exe().unwrap())
+            .args(["--exact", "cp_child_entry", "--nocapture", "--test-threads=1"])
+            .env(CP_CHILD, d.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(300 + rng.below(600)));
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        // the source reopens fine
+        drop(open(&d.path().join("db")));
+        for e in fs::read_dir(d.path()).unwrap() {
+            let p = e.unwrap().path();
+            if !p.file_name().unwrap().to_string_lossy().starts_with("cp-") {
+                continue;
+            }
+            // half-written checkpoints may refuse to open, finished ones must verify
+            let opts = lsmdb::Options { read_only: true, ..small_opts() };
+            if let Ok(cp) = Db::open(&p, opts) {
+                cp.verify_integrity().unwrap();
+            }
+        }
+        // stale partial dirs would make the child's next checkpoint of the same number fail
+        for e in fs::read_dir(d.path()).unwrap() {
+            let p = e.unwrap().path();
+            if p.file_name().unwrap() != "db" {
+                fs::remove_dir_all(p).unwrap();
+            }
+        }
+    }
 }
