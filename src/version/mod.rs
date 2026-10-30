@@ -12,7 +12,7 @@ use std::{
 
 use crate::{
     cache::BlockCache,
-    error::Result,
+    error::{Error, Result},
     iter::{BoxIter, InternalIterator},
     metrics::Metrics,
     sstable::{Table, TableIterator},
@@ -58,6 +58,25 @@ impl FileMeta {
         let t = Table::open(&self.path, self.verify, self.cache.clone())?;
         // two threads may both open; the loser's mapping is just dropped
         Ok(self.table.get_or_init(|| t).clone())
+    }
+
+    /// full read of the file with checksums forced on; returns the entry count
+    pub fn verify(&self) -> Result<u64> {
+        let len = fs::metadata(&self.path)?.len();
+        if len != self.size {
+            return Err(Error::corruption(format!(
+                "table {} is {len} bytes, manifest says {}",
+                self.number, self.size
+            )));
+        }
+        let (n, first, last) = Table::open(&self.path, true, None)?.verify_all()?;
+        if first != self.smallest || last != self.largest {
+            return Err(Error::corruption(format!(
+                "table {} key range differs from the manifest",
+                self.number
+            )));
+        }
+        Ok(n)
     }
 
     fn mark_obsolete(&self) {

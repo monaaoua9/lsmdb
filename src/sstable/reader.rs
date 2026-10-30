@@ -18,7 +18,7 @@ use crate::{
     error::{Error, Result},
     iter::InternalIterator,
     metrics::Metrics,
-    types::{parse_ikey, Hit, ValueKind},
+    types::{cmp_ikey, parse_ikey, Hit, ValueKind},
 };
 
 const MAX_BLOCK: usize = 256 << 20;
@@ -34,6 +34,7 @@ pub struct Table {
     len: usize,
     index: Block,
     filter: (usize, usize),
+    entries: u64,
     verify: bool,
     id: u64,
     cache: Option<Arc<BlockCache>>,
@@ -62,6 +63,7 @@ impl Table {
             len,
             index,
             filter: (footer.filter.offset as usize, footer.filter.size as usize),
+            entries: footer.num_entries,
             verify,
             id: NEXT_TABLE_ID.fetch_add(1, Relaxed),
             cache,
@@ -106,6 +108,38 @@ impl Table {
         }
         let value = (kind == ValueKind::Put).then(|| it.value().to_vec());
         Ok(Some(Hit { seq, value }))
+    }
+
+    /// reads every block and checks key order, the bloom filter and the entry
+    /// count. returns (entries, first key, last key)
+    pub fn verify_all(self: &Arc<Self>) -> Result<(u64, Vec<u8>, Vec<u8>)> {
+        let filter = &self.bytes()[self.filter.0..self.filter.0 + self.filter.1];
+        let mut it = self.iter();
+        it.seek_to_first();
+        let (mut n, mut first, mut last) = (0u64, Vec::new(), Vec::new());
+        while it.valid() {
+            let Some((uk, _, _)) = parse_ikey(it.key()) else {
+                return Err(Error::corruption("bad internal key"));
+            };
+            if n > 0 && cmp_ikey(&last, it.key()).is_ge() {
+                return Err(Error::corruption("keys out of order"));
+            }
+            if !bloom::may_contain(filter, uk) {
+                return Err(Error::corruption("key missing from bloom filter"));
+            }
+            if n == 0 {
+                first = it.key().to_vec();
+            }
+            last.clear();
+            last.extend_from_slice(it.key());
+            n += 1;
+            it.next();
+        }
+        it.status()?;
+        if n != self.entries {
+            return Err(Error::corruption(format!("footer says {} entries, found {n}", self.entries)));
+        }
+        Ok((n, first, last))
     }
 
     pub fn iter(self: &Arc<Self>) -> TableIterator {

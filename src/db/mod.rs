@@ -122,6 +122,14 @@ pub struct TableInfo {
     pub largest_key: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyReport {
+    pub tables: usize,
+    /// internal entries, so overwritten versions and tombstones count too
+    pub entries: u64,
+    pub bytes: u64,
+}
+
 impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
         opts.validate()?;
@@ -403,6 +411,19 @@ impl Db {
             let _ = fs::remove_dir_all(dest);
         }
         res
+    }
+
+    /// reads every table end to end with checksums on and checks that keys are
+    /// ordered, filters agree and the manifest matches the files. slow on big databases
+    pub fn verify_integrity(&self) -> Result<VerifyReport> {
+        let version = self.inner.state.lock().unwrap().version.clone();
+        let mut report = VerifyReport { tables: 0, entries: 0, bytes: 0 };
+        for f in version.levels.iter().flatten() {
+            report.entries += f.verify()?;
+            report.tables += 1;
+            report.bytes += f.size;
+        }
+        Ok(report)
     }
 
     /// every live table, level by level (L0 newest first)
