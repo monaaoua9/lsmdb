@@ -16,4 +16,5 @@ pub struct Metrics {
     pub trivial_moves: AtomicU64,
     pub compaction_read_bytes: AtomicU64,
     pub compaction_write_bytes: AtomicU64,
+    pub filtered: AtomicU64,
 }

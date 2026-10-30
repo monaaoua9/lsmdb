@@ -95,6 +95,8 @@ pub struct Stats {
     pub trivial_moves: u64,
     pub compaction_read_bytes: u64,
     pub compaction_write_bytes: u64,
+    /// entries removed by the compaction filter
+    pub filtered: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub cache_bytes: usize,
@@ -418,6 +420,7 @@ impl Db {
             trivial_moves: m.trivial_moves.load(Ordering::Relaxed),
             compaction_read_bytes: m.compaction_read_bytes.load(Ordering::Relaxed),
             compaction_write_bytes: m.compaction_write_bytes.load(Ordering::Relaxed),
+            filtered: m.filtered.load(Ordering::Relaxed),
             cache_hits: self.inner.cache.as_ref().map_or(0, |c| c.hits()),
             cache_misses: self.inner.cache.as_ref().map_or(0, |c| c.misses()),
             cache_bytes: self.inner.cache.as_ref().map_or(0, |c| c.used_bytes()),

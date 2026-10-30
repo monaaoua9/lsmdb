@@ -46,4 +46,4 @@ mod wal;
 pub use batch::WriteBatch;
 pub use db::{Db, DbIter, RevIter, Snapshot, Stats, Transaction, TxnIter};
 pub use error::{Error, Result};
-pub use options::{Compression, Options, WriteOptions};
+pub use options::{CompactionFilter, Compression, Options, WriteOptions};

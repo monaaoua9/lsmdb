@@ -1,9 +1,33 @@
+use std::{fmt, sync::Arc};
+
 use crate::error::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Compression {
     None,
     Lz4,
+}
+
+/// Called for entries that pass through a compaction; return true to remove
+/// the key. Only runs while no snapshot or transaction is open, and never
+/// on a flush, so it is a cleanup hook, not a read-time filter.
+#[derive(Clone)]
+pub struct CompactionFilter(Arc<dyn Fn(&[u8], &[u8]) -> bool + Send + Sync>);
+
+impl CompactionFilter {
+    pub fn new(f: impl Fn(&[u8], &[u8]) -> bool + Send + Sync + 'static) -> Self {
+        CompactionFilter(Arc::new(f))
+    }
+
+    pub(crate) fn should_remove(&self, key: &[u8], value: &[u8]) -> bool {
+        (self.0)(key, value)
+    }
+}
+
+impl fmt::Debug for CompactionFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CompactionFilter")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +52,7 @@ pub struct Options {
     pub level_base_bytes: u64,
     pub level_multiplier: u64,
     pub verify_checksums: bool,
+    pub compaction_filter: Option<CompactionFilter>,
 }
 
 impl Default for Options {
@@ -48,6 +73,7 @@ impl Default for Options {
             level_base_bytes: 64 << 20,
             level_multiplier: 10,
             verify_checksums: true,
+            compaction_filter: None,
         }
     }
 }

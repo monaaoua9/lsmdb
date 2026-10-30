@@ -13,7 +13,7 @@ use crate::{
     iter::{BoxIter, InternalIterator, MergingIterator},
     options::Options,
     sstable::{TableBuilder, TableInfo},
-    types::{parse_ikey, user_key, ValueKind, MAX_SEQ},
+    types::{make_ikey, parse_ikey, user_key, ValueKind, MAX_SEQ},
     version::{NewFile, VersionEdit, VersionSet},
 };
 
@@ -171,7 +171,8 @@ impl DbInner {
         let out_level = c.level + 1;
         let mut edit = VersionEdit::default();
 
-        if c.is_trivial_move() {
+        // with a filter configured every table has to be read at least once on its way down
+        if c.is_trivial_move() && self.opts.compaction_filter.is_none() {
             let f = &c.inputs[0][0];
             edit.deleted.push((c.level, f.number));
             edit.added.push((
@@ -198,6 +199,9 @@ impl DbInner {
         merge.seek_to_first();
 
         let smallest_snapshot = self.oldest_snapshot();
+        // a snapshot could still need the value the filter wants gone
+        let filter =
+            self.opts.compaction_filter.as_ref().filter(|_| self.snapshots.lock().unwrap().is_empty());
         let mut outputs: Vec<NewFile> = Vec::new();
         let mut cur: Option<(u64, TableBuilder)> = None;
         let mut cur_user: Vec<u8> = Vec::new();
@@ -220,12 +224,25 @@ impl DbInner {
                 // an entry is invisible to everyone if a newer entry for the same key is
                 // already at or below the oldest snapshot. tombstones can also go, but only
                 // when nothing older for the key could be sitting in a deeper level.
-                let drop_it = if last_seq_for_key <= smallest_snapshot {
+                let mut drop_it = if last_seq_for_key <= smallest_snapshot {
                     true
                 } else {
                     kind == ValueKind::Delete && seq <= smallest_snapshot && c.is_base_level_for_key(uk)
                 };
                 last_seq_for_key = seq;
+
+                // a filtered put turns into a tombstone unless nothing deeper holds an older value
+                let mut tomb = None;
+                if let Some(f) = filter {
+                    if !drop_it && kind == ValueKind::Put && f.should_remove(uk, merge.value()) {
+                        self.metrics.filtered.fetch_add(1, Relaxed);
+                        if c.is_base_level_for_key(uk) {
+                            drop_it = true;
+                        } else {
+                            tomb = Some(make_ikey(uk, seq, ValueKind::Delete));
+                        }
+                    }
+                }
 
                 if !drop_it {
                     // split only between user keys; versions of one key stay in one file
@@ -240,7 +257,11 @@ impl DbInner {
                         let n = self.next_file.fetch_add(1, Ordering::SeqCst);
                         cur = Some((n, TableBuilder::new(&table_path(&self.dir, n), &self.opts)?));
                     }
-                    cur.as_mut().unwrap().1.add(k, merge.value())?;
+                    let b = &mut cur.as_mut().unwrap().1;
+                    match &tomb {
+                        Some(t) => b.add(t, &[])?,
+                        None => b.add(k, merge.value())?,
+                    }
                 }
                 merge.next();
             }
