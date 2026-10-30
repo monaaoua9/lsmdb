@@ -112,6 +112,16 @@ impl Stats {
     }
 }
 
+/// one live table file, as seen by `Db::table_info`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableInfo {
+    pub level: usize,
+    pub number: u64,
+    pub size: u64,
+    pub smallest_key: Vec<u8>,
+    pub largest_key: Vec<u8>,
+}
+
 impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
         opts.validate()?;
@@ -393,6 +403,37 @@ impl Db {
             let _ = fs::remove_dir_all(dest);
         }
         res
+    }
+
+    /// every live table, level by level (L0 newest first)
+    pub fn table_info(&self) -> Vec<TableInfo> {
+        let version = self.inner.state.lock().unwrap().version.clone();
+        let mut out = Vec::new();
+        for (level, files) in version.levels.iter().enumerate() {
+            for f in files {
+                out.push(TableInfo {
+                    level,
+                    number: f.number,
+                    size: f.size,
+                    smallest_key: f.smallest_user().to_vec(),
+                    largest_key: f.largest_user().to_vec(),
+                });
+            }
+        }
+        out
+    }
+
+    /// on-disk bytes of the tables that overlap [lower, upper). counts whole
+    /// files, so it overshoots for narrow ranges; the memtable is not included
+    pub fn approximate_size(&self, lower: &[u8], upper: &[u8]) -> u64 {
+        if lower >= upper {
+            return 0;
+        }
+        self.table_info()
+            .iter()
+            .filter(|t| t.largest_key.as_slice() >= lower && t.smallest_key.as_slice() < upper)
+            .map(|t| t.size)
+            .sum()
     }
 
     pub fn stats(&self) -> Stats {
