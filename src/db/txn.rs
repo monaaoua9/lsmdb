@@ -90,9 +90,11 @@ impl<'a> Transaction<'a> {
     pub fn rollback(self) {}
 }
 
+type LocalWrite = (Vec<u8>, Option<Vec<u8>>);
+
 pub struct TxnIter {
     base: DbIter,
-    local: Peekable<IntoIter<(Vec<u8>, Option<Vec<u8>>)>>,
+    local: Peekable<IntoIter<LocalWrite>>,
     done: bool,
 }
 

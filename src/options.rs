@@ -12,7 +12,9 @@ pub enum Compression {
 /// the key. Only runs while no snapshot or transaction is open, and never
 /// on a flush, so it is a cleanup hook, not a read-time filter.
 #[derive(Clone)]
-pub struct CompactionFilter(Arc<dyn Fn(&[u8], &[u8]) -> bool + Send + Sync>);
+pub struct CompactionFilter(Arc<FilterFn>);
+
+type FilterFn = dyn Fn(&[u8], &[u8]) -> bool + Send + Sync;
 
 impl CompactionFilter {
     pub fn new(f: impl Fn(&[u8], &[u8]) -> bool + Send + Sync + 'static) -> Self {
