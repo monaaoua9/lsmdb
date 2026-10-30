@@ -11,6 +11,7 @@ use std::{
 
 use super::{FileMeta, NewFile, Version, VersionEdit, NUM_LEVELS};
 use crate::{
+    cache::BlockCache,
     error::{Error, Result},
     filename::{current_path, manifest_name, sync_dir, table_path},
     options::Options,
@@ -23,6 +24,7 @@ use crate::{
 pub struct VersionSet {
     dir: PathBuf,
     verify: bool,
+    cache: Option<Arc<BlockCache>>,
     next_file: Arc<AtomicU64>,
     log_number: u64,
     last_seq: u64,
@@ -41,7 +43,12 @@ fn sort_level(level: usize, files: &mut [Arc<FileMeta>]) {
 }
 
 impl VersionSet {
-    pub fn open(dir: &Path, opts: &Options, next_file: Arc<AtomicU64>) -> Result<VersionSet> {
+    pub fn open(
+        dir: &Path,
+        opts: &Options,
+        next_file: Arc<AtomicU64>,
+        cache: Option<Arc<BlockCache>>,
+    ) -> Result<VersionSet> {
         let cur = current_path(dir);
         let mut raw: Vec<Vec<NewFile>> = vec![Vec::new(); NUM_LEVELS];
         let (mut log_number, mut last_seq, mut next) = (0, 0, 2);
@@ -78,7 +85,14 @@ impl VersionSet {
         for (i, files) in raw.into_iter().enumerate() {
             let mut v: Vec<_> = files
                 .into_iter()
-                .map(|f| Arc::new(FileMeta::new(table_path(dir, f.number), opts.verify_checksums, f)))
+                .map(|f| {
+                    Arc::new(FileMeta::new(
+                        table_path(dir, f.number),
+                        opts.verify_checksums,
+                        cache.clone(),
+                        f,
+                    ))
+                })
                 .collect();
             sort_level(i, &mut v);
             levels.push(v);
@@ -90,6 +104,7 @@ impl VersionSet {
         Ok(VersionSet {
             dir: dir.to_path_buf(),
             verify: opts.verify_checksums,
+            cache,
             next_file,
             log_number,
             last_seq,
@@ -192,7 +207,12 @@ impl VersionSet {
         for (level, f) in &edit.added {
             // trivial moves re-add a file under a new level; keep the same FileMeta
             let meta = existing.get(&f.number).cloned().unwrap_or_else(|| {
-                Arc::new(FileMeta::new(table_path(&self.dir, f.number), self.verify, f.clone()))
+                Arc::new(FileMeta::new(
+                    table_path(&self.dir, f.number),
+                    self.verify,
+                    self.cache.clone(),
+                    f.clone(),
+                ))
             });
             levels[*level].push(meta);
         }

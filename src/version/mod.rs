@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::{
+    cache::BlockCache,
     error::Result,
     iter::{BoxIter, InternalIterator},
     metrics::Metrics,
@@ -30,12 +31,13 @@ pub struct FileMeta {
     pub largest: Vec<u8>,
     path: PathBuf,
     verify: bool,
+    cache: Option<Arc<BlockCache>>,
     table: OnceLock<Arc<Table>>,
     obsolete: AtomicBool,
 }
 
 impl FileMeta {
-    fn new(path: PathBuf, verify: bool, f: NewFile) -> Self {
+    fn new(path: PathBuf, verify: bool, cache: Option<Arc<BlockCache>>, f: NewFile) -> Self {
         FileMeta {
             number: f.number,
             size: f.size,
@@ -43,6 +45,7 @@ impl FileMeta {
             largest: f.largest,
             path,
             verify,
+            cache,
             table: OnceLock::new(),
             obsolete: AtomicBool::new(false),
         }
@@ -52,7 +55,7 @@ impl FileMeta {
         if let Some(t) = self.table.get() {
             return Ok(t.clone());
         }
-        let t = Table::open(&self.path, self.verify)?;
+        let t = Table::open(&self.path, self.verify, self.cache.clone())?;
         // two threads may both open; the loser's mapping is just dropped
         Ok(self.table.get_or_init(|| t).clone())
     }

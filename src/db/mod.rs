@@ -16,6 +16,7 @@ use std::{
 
 use crate::{
     batch::{replay_record, WriteBatch},
+    cache::BlockCache,
     error::{Error, Result},
     filename::{self, FileKind},
     iter::InternalIterator,
@@ -57,6 +58,7 @@ pub(crate) struct DbInner {
     shutdown: AtomicBool,
     bg_error: Mutex<Option<Error>>,
     metrics: Metrics,
+    cache: Option<Arc<BlockCache>>,
     lock_file: Mutex<Option<File>>,
 }
 
@@ -93,6 +95,9 @@ pub struct Stats {
     pub trivial_moves: u64,
     pub compaction_read_bytes: u64,
     pub compaction_write_bytes: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_bytes: usize,
 }
 
 impl Stats {
@@ -131,7 +136,8 @@ impl Db {
                 _ => {}
             }
         }
-        let mut vs = VersionSet::open(&dir, &opts, next_file.clone())?;
+        let cache = (opts.block_cache_bytes > 0).then(|| Arc::new(BlockCache::new(opts.block_cache_bytes)));
+        let mut vs = VersionSet::open(&dir, &opts, next_file.clone(), cache.clone())?;
 
         let mut logs: Vec<u64> = fs::read_dir(&dir)?
             .filter_map(|e| e.ok())
@@ -188,6 +194,7 @@ impl Db {
             shutdown: AtomicBool::new(false),
             bg_error: Mutex::new(None),
             metrics: Metrics::default(),
+            cache,
             lock_file: Mutex::new(Some(lock)),
         });
 
@@ -388,6 +395,9 @@ impl Db {
             trivial_moves: m.trivial_moves.load(Ordering::Relaxed),
             compaction_read_bytes: m.compaction_read_bytes.load(Ordering::Relaxed),
             compaction_write_bytes: m.compaction_write_bytes.load(Ordering::Relaxed),
+            cache_hits: self.inner.cache.as_ref().map_or(0, |c| c.hits()),
+            cache_misses: self.inner.cache.as_ref().map_or(0, |c| c.misses()),
+            cache_bytes: self.inner.cache.as_ref().map_or(0, |c| c.used_bytes()),
         }
     }
 }

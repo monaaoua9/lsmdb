@@ -1,4 +1,9 @@
-use std::{fs::File, path::Path, sync::atomic::Ordering::Relaxed, sync::Arc};
+use std::{
+    fs::File,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    sync::Arc,
+};
 
 use memmap2::Mmap;
 
@@ -8,6 +13,7 @@ use super::{
 };
 use crate::{
     bloom,
+    cache::BlockCache,
     coding::{crc_masked, read_fixed32},
     error::{Error, Result},
     iter::InternalIterator,
@@ -16,6 +22,9 @@ use crate::{
 };
 
 const MAX_BLOCK: usize = 256 << 20;
+
+// cache keys must not collide across tables, and file numbers can be reused after a crash
+static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Immutable SSTable served straight out of an mmap: blocks are slices of
 /// the mapping, so a read costs a page fault at worst and no copy into a
@@ -26,10 +35,12 @@ pub struct Table {
     index: Block,
     filter: (usize, usize),
     verify: bool,
+    id: u64,
+    cache: Option<Arc<BlockCache>>,
 }
 
 impl Table {
-    pub fn open(path: &Path, verify: bool) -> Result<Arc<Table>> {
+    pub fn open(path: &Path, verify: bool, cache: Option<Arc<BlockCache>>) -> Result<Arc<Table>> {
         let file = File::open(path)?;
         let len = file.metadata()?.len() as usize;
         if len < FOOTER_LEN {
@@ -44,7 +55,7 @@ impl Table {
 
         let raw: &dyn AsRef<[u8]> = &*backing;
         let footer = Footer::decode(&raw.as_ref()[len - FOOTER_LEN..])?;
-        let index = read_block(&backing, len, verify, footer.index)?;
+        let index = read_block(&backing, len, verify, footer.index, None)?;
         check_region(raw.as_ref(), len, verify, footer.filter)?;
         Ok(Arc::new(Table {
             backing,
@@ -52,6 +63,8 @@ impl Table {
             index,
             filter: (footer.filter.offset as usize, footer.filter.size as usize),
             verify,
+            id: NEXT_TABLE_ID.fetch_add(1, Relaxed),
+            cache,
         }))
     }
 
@@ -61,7 +74,7 @@ impl Table {
     }
 
     fn read_block(&self, h: BlockHandle) -> Result<Block> {
-        read_block(&self.backing, self.len, self.verify, h)
+        read_block(&self.backing, self.len, self.verify, h, self.cache.as_deref().map(|c| (c, self.id)))
     }
 
     pub fn get(&self, ukey: &[u8], seek: &[u8], m: &Metrics) -> Result<Option<Hit>> {
@@ -112,10 +125,22 @@ fn check_region(bytes: &[u8], len: usize, verify: bool, h: BlockHandle) -> Resul
     Ok(())
 }
 
-fn read_block(backing: &Backing, len: usize, verify: bool, h: BlockHandle) -> Result<Block> {
+fn read_block(
+    backing: &Backing,
+    len: usize,
+    verify: bool,
+    h: BlockHandle,
+    cache: Option<(&BlockCache, u64)>,
+) -> Result<Block> {
     let raw: &dyn AsRef<[u8]> = &**backing;
-    check_region(raw.as_ref(), len, verify, h)?;
     let off = h.offset as usize;
+    if let Some((c, id)) = cache {
+        if let Some(plain) = c.get(id, h.offset) {
+            let n = plain.len();
+            return Block::new(plain, 0, n);
+        }
+    }
+    check_region(raw.as_ref(), len, verify, h)?;
     let end = off + h.size as usize;
     match raw.as_ref()[end] {
         BLOCK_RAW => Block::new(backing.clone(), off, end),
@@ -129,7 +154,11 @@ fn read_block(backing: &Backing, len: usize, verify: bool, h: BlockHandle) -> Re
             let plain = lz4_flex::block::decompress_size_prepended(src)
                 .map_err(|e| Error::corruption(format!("lz4: {e}")))?;
             let n = plain.len();
-            Block::new(Arc::new(plain), 0, n)
+            let plain = Arc::new(plain);
+            if let Some((c, id)) = cache {
+                c.insert(id, h.offset, plain.clone());
+            }
+            Block::new(plain, 0, n)
         }
         t => Err(Error::corruption(format!("unknown block type {t}"))),
     }

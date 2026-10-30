@@ -28,6 +28,7 @@
 
 mod batch;
 mod bloom;
+mod cache;
 mod coding;
 mod compaction;
 mod db;
