@@ -94,3 +94,12 @@ A WAL append/fsync failure puts the database in a poisoned, read-only state (`Er
 * Isolation is SI, not serializable (write skew is possible unless you use `get_for_update`).
 * The manifest is compacted by rewrite on open, not while running.
 * Directory fsync after creating files and renaming `CURRENT` is done on Unix; on Windows it is skipped (std can't open directories there). Crash tests kill the process; real power-loss behaviour of the filesystem is not simulated.
+
+## Later additions
+
+* **Reverse iteration.** Every `InternalIterator` has `seek_to_last`/`prev`. Blocks step back by jumping to the restart point before the current entry and scanning forward; the skiplist uses `find_lt`; `MergingIterator` re-seeks the other children when the direction flips. `DbIter` walks versions of a key oldest-first in reverse mode, so each visible entry overwrites the last one and a tombstone clears the candidate.
+* **Block cache.** Only LZ4 blocks need it (raw blocks are mmap slices). 16-shard LRU keyed by (table id, offset), budget from `Options::block_cache_bytes`.
+* **Compaction filter.** A put the filter removes becomes a tombstone unless no deeper level can hold the key. The filter is skipped while any snapshot is open, and trivial moves are disabled when one is configured so every table is seen once.
+* **TtlDb.** Values carry an 8 byte deadline; reads hide expired entries, a compaction filter reclaims them.
+* **Checkpoint.** Flush, then under the compaction lock hard-link live tables and write a fresh single-record manifest into the target directory.
+* **Read-only.** `VersionSet` skips the snapshot manifest, the log is replayed into a memtable that is never flushed, `LOCK` is taken shared.

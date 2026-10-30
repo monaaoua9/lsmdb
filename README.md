@@ -13,6 +13,9 @@ Embedded LSM-tree storage engine in Rust. Group-committed WAL, lock-free skiplis
 - **MVCC**: cheap snapshots and range iterators; transactions with first-committer-wins conflict detection (`get_for_update` to avoid write skew).
 - **Safety**: manifest with atomic `CURRENT` switch, directory lock, orphan-file sweep on open, DB goes read-only (`Error::Poisoned`) if the WAL or a background job fails.
 
+- **Iteration**: forward and reverse (`rev()`, `seek_for_prev`), prefix scans, `delete_range`, per-transaction range scans that overlay uncommitted writes.
+- **Extras**: `transact` with conflict retry, `compare_and_swap`, `increment`, named buckets, `TtlDb` with per-key expiry, compaction filter hook, `checkpoint` (hard-linked backup), read-only open, `verify_integrity`, LRU cache for decompressed blocks.
+
 ## Usage
 
 ```toml
@@ -41,6 +44,24 @@ tx.commit()?;                                        // Err(Error::Conflict) if 
 ```
 
 Atomic multi-key writes go through `WriteBatch`; pass `WriteOptions { sync: false }` to trade power-loss durability for speed.
+
+### More API
+
+```rust
+let users = db.bucket("users")?;                 // isolated keyspace
+users.put(b"1", "ada")?;
+
+for kv in db.range(Some(&b"a"[..]), None)?.rev() { /* descending */ }
+let hits = db.increment(b"hits", 1)?;            // atomic counter
+db.checkpoint("backup-2026-10-30")?;             // consistent copy, hard-linked tables
+let report = db.verify_integrity()?;             // reads every block, checks crc/order/bloom
+```
+
+`examples/lsmcli.rs` is a small command line front end (`get`, `put`, `scan`, `stats`, `verify`, `checkpoint`, ...):
+
+```
+cargo run --release --example lsmcli -- ./data scan user: 10
+```
 
 ## Build and test
 
