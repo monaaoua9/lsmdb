@@ -2,7 +2,7 @@
 // errors (Corruption etc.) are fine, wrong-but-quiet answers for untouched data are not checked here
 mod common;
 use common::*;
-use lsmdb::{Db, WriteBatch, WriteOptions};
+use lsmdb::{Db, Options, WriteBatch, WriteOptions};
 use std::{
     fs,
     panic::{self, AssertUnwindSafe},
@@ -128,5 +128,51 @@ fn random_corruption_never_panics() {
         }
         let r = panic::catch_unwind(AssertUnwindSafe(|| exercise(work.path())));
         assert!(r.is_ok() && PANICS.load(Ordering::SeqCst) == 0, "panic on round {round}, file {victim:?}");
+    }
+}
+
+fn exercise_ro(dir: &Path) {
+    let opts = Options { read_only: true, ..small_opts() };
+    let Ok(db) = Db::open(dir, opts) else { return };
+    let _ = db.get(&key(7));
+    let _ = db.verify_integrity();
+    if let Ok(it) = db.iter() {
+        for kv in it.rev() {
+            if kv.is_err() {
+                break;
+            }
+        }
+    }
+    if let Ok(mut it) = db.iter() {
+        it.seek_to_last();
+        it.seek_for_prev(&key(200));
+        it.retreat();
+        it.advance();
+    }
+}
+
+#[test]
+fn corrupt_readonly_and_checkpoint_never_panic() {
+    let base = tempfile::tempdir().unwrap();
+    build(base.path());
+    let cp = tempfile::tempdir().unwrap();
+    let cp_dir = cp.path().join("cp");
+    open(base.path()).checkpoint(&cp_dir).unwrap();
+
+    let mut rng = Rng(0xc0ffee_77);
+    for src in [base.path(), cp_dir.as_path()] {
+        let files: Vec<PathBuf> = fs::read_dir(src)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.file_name().unwrap() != "LOCK")
+            .collect();
+        for round in 0..80 {
+            let work = tempfile::tempdir().unwrap();
+            copy_dir(src, work.path());
+            let victim = &files[rng.below(files.len() as u64) as usize];
+            mutate(&work.path().join(victim.file_name().unwrap()), &mut rng);
+            let r = panic::catch_unwind(AssertUnwindSafe(|| exercise_ro(work.path())));
+            assert!(r.is_ok(), "panic on round {round}, file {victim:?}");
+        }
     }
 }
