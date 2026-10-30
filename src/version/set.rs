@@ -183,6 +183,21 @@ impl VersionSet {
         self.compact_ptr[level] = key;
     }
 
+    /// links (or copies) every live table into `dest` and gives it its own manifest
+    pub fn write_checkpoint(&self, dest: &Path) -> Result<()> {
+        for f in self.current.levels.iter().flatten() {
+            let from = table_path(&self.dir, f.number);
+            let to = table_path(dest, f.number);
+            // tables are immutable so a hard link is as good as a copy; fall back
+            // for filesystems that can't link (other volume, fat)
+            if fs::hard_link(&from, &to).is_err() {
+                fs::copy(&from, &to)?;
+            }
+        }
+        Self::write_snapshot(dest, 1, &self.current.levels, self.log_number, self.last_seq, &self.next_file)?;
+        Ok(())
+    }
+
     pub fn live_files(&self) -> Vec<u64> {
         self.current.levels.iter().flatten().map(|f| f.number).collect()
     }

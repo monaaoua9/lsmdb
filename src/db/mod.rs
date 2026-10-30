@@ -370,6 +370,29 @@ impl Db {
         Ok(())
     }
 
+    /// consistent copy of everything written before the call, as a database in
+    /// `dest` (which must not exist or be empty). tables are hard-linked when the
+    /// filesystem allows it, so this is cheap; writes made while it runs may or may not be in
+    pub fn checkpoint(&self, dest: impl AsRef<Path>) -> Result<()> {
+        let dest = dest.as_ref();
+        let existed = dest.exists();
+        if existed && fs::read_dir(dest)?.next().is_some() {
+            return Err(Error::invalid("checkpoint directory is not empty"));
+        }
+        fs::create_dir_all(dest)?;
+        let res = (|| {
+            self.inner.flush()?;
+            // no compaction may retire a table while we link it
+            let _g = self.inner.compaction_lock.lock().unwrap();
+            let vs = self.inner.versions.lock().unwrap();
+            vs.write_checkpoint(dest)
+        })();
+        if res.is_err() && !existed {
+            let _ = fs::remove_dir_all(dest);
+        }
+        res
+    }
+
     pub fn stats(&self) -> Stats {
         let (mem, version) = {
             let s = self.inner.state.lock().unwrap();
