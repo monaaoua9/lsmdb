@@ -47,6 +47,13 @@ impl WriteBatch {
         self.ops.is_empty()
     }
 
+    /// moves everything from `other` onto the end of this batch
+    pub fn append(&mut self, other: &mut WriteBatch) {
+        self.bytes += other.bytes;
+        self.ops.append(&mut other.ops);
+        other.bytes = 0;
+    }
+
     pub fn clear(&mut self) {
         self.ops.clear();
         self.bytes = 0;

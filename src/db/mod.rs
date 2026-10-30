@@ -197,6 +197,33 @@ impl Db {
         self.inner.submit(Writer::new(batch, wo.sync))
     }
 
+    /// deletes every key in [lower, upper) as of now and returns how many.
+    /// done in chunks of tombstones, so it is not atomic as a whole; keys
+    /// written after the call starts are left alone
+    pub fn delete_range(&self, lower: &[u8], upper: &[u8]) -> Result<u64> {
+        self.delete_where(self.range(Some(lower), Some(upper))?)
+    }
+
+    pub fn delete_prefix(&self, prefix: &[u8]) -> Result<u64> {
+        self.delete_where(self.prefix(prefix)?)
+    }
+
+    fn delete_where(&self, mut it: DbIter) -> Result<u64> {
+        const CHUNK: usize = 1000;
+        let (mut total, mut b) = (0u64, WriteBatch::new());
+        while it.valid() {
+            b.delete(it.key());
+            total += 1;
+            if b.len() >= CHUNK {
+                self.write(std::mem::take(&mut b), &WriteOptions::default())?;
+            }
+            it.advance();
+        }
+        it.status()?;
+        self.write(b, &WriteOptions::default())?;
+        Ok(total)
+    }
+
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let seq = self.inner.last_seq.load(Ordering::Acquire);
         Ok(self.inner.get_at(key, seq)?.and_then(|h| h.value))

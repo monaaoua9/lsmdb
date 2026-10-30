@@ -191,3 +191,54 @@ fn contains_and_get_many() {
     assert!(snap.contains_key(b"a").unwrap());
     assert_eq!(db.path(), d.path());
 }
+
+#[test]
+fn delete_range_and_prefix() {
+    let d = tempfile::tempdir().unwrap();
+    let db = open(d.path());
+    for i in 0..3000 {
+        db.put(key(i), val(i, 0)).unwrap();
+    }
+    db.flush().unwrap();
+
+    let n = db.delete_range(&key(100), &key(2600)).unwrap();
+    assert_eq!(n, 2500);
+    assert!(db.get(&key(99)).unwrap().is_some());
+    assert!(db.get(&key(100)).unwrap().is_none());
+    assert!(db.get(&key(2599)).unwrap().is_none());
+    assert!(db.get(&key(2600)).unwrap().is_some());
+    assert_eq!(db.iter().unwrap().count(), 500);
+
+    assert_eq!(db.delete_prefix(b"key-000000").unwrap(), 100);
+    assert_eq!(db.delete_prefix(b"key-000000").unwrap(), 0);
+    assert_eq!(db.iter().unwrap().count(), 400);
+}
+
+#[test]
+fn delete_range_spares_snapshots() {
+    let d = tempfile::tempdir().unwrap();
+    let db = open(d.path());
+    for i in 0..50 {
+        db.put(key(i), "x").unwrap();
+    }
+    let snap = db.snapshot();
+    db.delete_range(&key(0), &key(50)).unwrap();
+    db.compact_all().unwrap();
+    assert!(db.iter().unwrap().next().is_none());
+    assert_eq!(snap.range(None, None).unwrap().count(), 50);
+}
+
+#[test]
+fn batch_append() {
+    let d = tempfile::tempdir().unwrap();
+    let db = open(d.path());
+    let mut a = WriteBatch::new();
+    let mut b = WriteBatch::new();
+    a.put("a", "1");
+    b.put("b", "2").delete("a");
+    a.append(&mut b);
+    assert_eq!((a.len(), b.len()), (3, 0));
+    db.write(a, &WriteOptions::default()).unwrap();
+    assert_eq!(db.get(b"a").unwrap(), None);
+    assert_eq!(db.get(b"b").unwrap().unwrap(), b"2");
+}
