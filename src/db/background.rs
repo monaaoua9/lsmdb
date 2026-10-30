@@ -1,4 +1,9 @@
-use std::{fs, path::Path, sync::atomic::Ordering, time::Duration};
+use std::{
+    fs,
+    path::Path,
+    sync::atomic::Ordering::{self, Relaxed},
+    time::Duration,
+};
 
 use super::DbInner;
 use crate::{
@@ -105,12 +110,14 @@ impl DbInner {
             let mut it = imm.iter();
             it.seek_to_first();
             let info = write_table(&self.dir, &self.opts, number, &mut it)?;
+            self.metrics.flush_bytes.fetch_add(info.size, Relaxed);
             edit.added.push((
                 0,
                 NewFile { number, size: info.size, smallest: info.smallest, largest: info.largest },
             ));
         }
         self.install(edit, true)?;
+        self.metrics.flushes.fetch_add(1, Relaxed);
 
         // logs older than the one the new memtable started with are covered by the table now
         if let Ok(rd) = fs::read_dir(&self.dir) {
@@ -177,6 +184,7 @@ impl DbInner {
                 },
             ));
             self.versions.lock().unwrap().set_compact_ptr(c.level, f.largest.clone());
+            self.metrics.trivial_moves.fetch_add(1, Relaxed);
             return self.install(edit, false);
         }
 
@@ -257,6 +265,10 @@ impl DbInner {
         {
             self.versions.lock().unwrap().set_compact_ptr(c.level, last.clone());
         }
+        let m = &self.metrics;
+        m.compactions.fetch_add(1, Relaxed);
+        m.compaction_read_bytes.fetch_add(c.inputs.iter().flatten().map(|f| f.size).sum(), Relaxed);
+        m.compaction_write_bytes.fetch_add(outputs.iter().map(|o| o.size).sum(), Relaxed);
         edit.added.extend(outputs.into_iter().map(|o| (out_level, o)));
         self.install(edit, false)
     }

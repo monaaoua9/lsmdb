@@ -127,6 +127,7 @@ impl DbInner {
                         None => self.latest_seq(k)?,
                     };
                     if latest > c.start_seq {
+                        self.metrics.conflicts.fetch_add(1, Ordering::Relaxed);
                         results[i] = Err(Error::Conflict);
                         continue 'writers;
                     }
@@ -147,6 +148,14 @@ impl DbInner {
         rec[8..12].copy_from_slice(&count.to_le_bytes());
 
         let sync = group.iter().any(|w| w.sync);
+        let m = &self.metrics;
+        m.write_ops.fetch_add(applied.len() as u64, Ordering::Relaxed);
+        let payload: usize =
+            results.iter().zip(group).filter(|(r, _)| r.is_ok()).map(|(_, w)| w.batch.byte_size()).sum();
+        m.write_bytes.fetch_add(payload as u64, Ordering::Relaxed);
+        if sync {
+            m.wal_syncs.fetch_add(1, Ordering::Relaxed);
+        }
         let wal_res = {
             let mut wal = self.wal.lock().unwrap();
             wal.append(&rec).and_then(|_| if sync { wal.sync() } else { Ok(()) })
@@ -175,10 +184,12 @@ impl DbInner {
             self.check_bg_error()?;
             let l0 = s.version.num_files(0);
             if l0 >= self.opts.l0_stop_trigger {
+                self.metrics.stalls.fetch_add(1, Ordering::Relaxed);
                 s = self.state_cv.wait_timeout(s, Duration::from_millis(50)).unwrap().0;
             } else if l0 >= self.opts.l0_slowdown_trigger && !slowed {
                 // soften the cliff: give compaction a little breathing room, once per write
                 drop(s);
+                self.metrics.stalls.fetch_add(1, Ordering::Relaxed);
                 std::thread::sleep(Duration::from_millis(1));
                 slowed = true;
                 s = self.state.lock().unwrap();

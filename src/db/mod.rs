@@ -80,6 +80,29 @@ pub struct Stats {
     pub bloom_checked: u64,
     pub bloom_skipped: u64,
     pub block_reads: u64,
+    pub write_ops: u64,
+    /// user payload (keys + values) accepted so far
+    pub write_bytes: u64,
+    pub wal_syncs: u64,
+    pub conflicts: u64,
+    /// writes that were slowed or blocked by too many L0 files
+    pub stalls: u64,
+    pub flushes: u64,
+    pub flush_bytes: u64,
+    pub compactions: u64,
+    pub trivial_moves: u64,
+    pub compaction_read_bytes: u64,
+    pub compaction_write_bytes: u64,
+}
+
+impl Stats {
+    /// bytes written to tables per user byte; 0 until something was written
+    pub fn write_amplification(&self) -> f64 {
+        if self.write_bytes == 0 {
+            return 0.0;
+        }
+        (self.flush_bytes + self.compaction_write_bytes) as f64 / self.write_bytes as f64
+    }
 }
 
 impl Db {
@@ -344,6 +367,17 @@ impl Db {
             bloom_checked: m.bloom_checked.load(Ordering::Relaxed),
             bloom_skipped: m.bloom_skipped.load(Ordering::Relaxed),
             block_reads: m.block_reads.load(Ordering::Relaxed),
+            write_ops: m.write_ops.load(Ordering::Relaxed),
+            write_bytes: m.write_bytes.load(Ordering::Relaxed),
+            wal_syncs: m.wal_syncs.load(Ordering::Relaxed),
+            conflicts: m.conflicts.load(Ordering::Relaxed),
+            stalls: m.stalls.load(Ordering::Relaxed),
+            flushes: m.flushes.load(Ordering::Relaxed),
+            flush_bytes: m.flush_bytes.load(Ordering::Relaxed),
+            compactions: m.compactions.load(Ordering::Relaxed),
+            trivial_moves: m.trivial_moves.load(Ordering::Relaxed),
+            compaction_read_bytes: m.compaction_read_bytes.load(Ordering::Relaxed),
+            compaction_write_bytes: m.compaction_write_bytes.load(Ordering::Relaxed),
         }
     }
 }
