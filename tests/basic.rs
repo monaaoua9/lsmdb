@@ -242,3 +242,24 @@ fn batch_append() {
     assert_eq!(db.get(b"a").unwrap(), None);
     assert_eq!(db.get(b"b").unwrap().unwrap(), b"2");
 }
+
+#[test]
+fn bad_options_are_rejected() {
+    let d = tempfile::tempdir().unwrap();
+    let bad = [
+        Options { write_buffer_size: 10, ..small_opts() },
+        Options { block_size: 8, ..small_opts() },
+        Options { block_restart_interval: 0, ..small_opts() },
+        Options { l0_compaction_trigger: 0, ..small_opts() },
+        Options { l0_compaction_trigger: 6, l0_slowdown_trigger: 4, ..small_opts() },
+        Options { l0_stop_trigger: 3, ..small_opts() },
+        Options { level_multiplier: 1, ..small_opts() },
+        Options { level_base_bytes: 0, ..small_opts() },
+        Options { target_file_size: 0, ..small_opts() },
+    ];
+    for o in bad {
+        assert!(matches!(Db::open(d.path(), o), Err(Error::InvalidArgument(_))));
+    }
+    // rejected before anything touched the directory
+    assert!(Db::open(d.path(), small_opts()).is_ok());
+}

@@ -107,6 +107,7 @@ impl Stats {
 
 impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
+        opts.validate()?;
         let dir = path.as_ref().to_path_buf();
         if opts.create_if_missing {
             fs::create_dir_all(&dir)?;

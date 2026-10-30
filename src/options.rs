@@ -1,3 +1,5 @@
+use crate::error::{Error, Result};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Compression {
     None,
@@ -56,5 +58,34 @@ pub struct WriteOptions {
 impl Default for WriteOptions {
     fn default() -> Self {
         WriteOptions { sync: true }
+    }
+}
+
+impl Options {
+    pub fn validate(&self) -> Result<()> {
+        if self.write_buffer_size < 1024 {
+            return Err(Error::invalid("write_buffer_size must be at least 1 KiB"));
+        }
+        if self.target_file_size == 0 {
+            return Err(Error::invalid("target_file_size must be positive"));
+        }
+        if self.block_size < 64 {
+            return Err(Error::invalid("block_size must be at least 64"));
+        }
+        if self.block_restart_interval == 0 {
+            return Err(Error::invalid("block_restart_interval must be positive"));
+        }
+        if self.l0_compaction_trigger == 0 {
+            return Err(Error::invalid("l0_compaction_trigger must be positive"));
+        }
+        if !(self.l0_compaction_trigger <= self.l0_slowdown_trigger
+            && self.l0_slowdown_trigger <= self.l0_stop_trigger)
+        {
+            return Err(Error::invalid("need l0 compaction <= slowdown <= stop triggers"));
+        }
+        if self.level_base_bytes == 0 || self.level_multiplier < 2 {
+            return Err(Error::invalid("level_base_bytes must be positive and level_multiplier >= 2"));
+        }
+        Ok(())
     }
 }
