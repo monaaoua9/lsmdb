@@ -28,6 +28,7 @@
 
 mod batch;
 mod bloom;
+mod bucket;
 mod cache;
 mod coding;
 mod compaction;
@@ -45,6 +46,7 @@ mod version;
 mod wal;
 
 pub use batch::WriteBatch;
+pub use bucket::{Bucket, BucketBatch, BucketIter};
 pub use db::{Db, DbIter, RevIter, Snapshot, Stats, TableInfo, Transaction, TxnIter, VerifyReport};
 pub use error::{Error, Result};
 pub use options::{CompactionFilter, Compression, Options, WriteOptions};
