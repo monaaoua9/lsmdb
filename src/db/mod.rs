@@ -28,7 +28,7 @@ use crate::{
 };
 
 pub use iter::DbIter;
-pub use txn::Transaction;
+pub use txn::{Transaction, TxnIter};
 use write::Writer;
 
 struct State {
@@ -274,6 +274,48 @@ impl Db {
         Transaction::new(self)
     }
 
+    /// runs `f` in a fresh transaction and commits; on a write conflict the
+    /// whole closure is re-run, up to `retries` extra times
+    pub fn transact<T>(
+        &self,
+        retries: usize,
+        mut f: impl FnMut(&mut Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let mut left = retries;
+        loop {
+            let mut tx = self.begin();
+            let out = f(&mut tx)?;
+            match tx.commit() {
+                Ok(()) => return Ok(out),
+                Err(e) if e.is_conflict() && left > 0 => left -= 1,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// sets `key` to `new` (None deletes) only if it currently holds `expected`
+    /// (None = absent). false means the value differed or lost a race
+    pub fn compare_and_swap(
+        &self,
+        key: &[u8],
+        expected: Option<&[u8]>,
+        new: Option<Vec<u8>>,
+    ) -> Result<bool> {
+        let mut tx = self.begin();
+        if tx.get_for_update(key)?.as_deref() != expected {
+            return Ok(false);
+        }
+        match new {
+            Some(v) => tx.put(key, v),
+            None => tx.delete(key),
+        }
+        match tx.commit() {
+            Ok(()) => Ok(true),
+            Err(e) if e.is_conflict() => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// rotates the memtable and blocks until it is on disk as an L0 table
     pub fn flush(&self) -> Result<()> {
         self.inner.flush()
@@ -372,6 +414,12 @@ impl DbInner {
         let mut l = self.snapshots.lock().unwrap();
         let seq = self.last_seq.load(Ordering::Acquire);
         *l.entry(seq).or_insert(0) += 1;
+        Snapshot { inner: self.clone(), seq }
+    }
+
+    // second handle on a seq that some live snapshot already pins
+    fn pin_snapshot(self: &Arc<Self>, seq: SeqNo) -> Snapshot {
+        *self.snapshots.lock().unwrap().entry(seq).or_insert(0) += 1;
         Snapshot { inner: self.clone(), seq }
     }
 

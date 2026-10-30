@@ -25,6 +25,12 @@ impl Error {
     }
 }
 
+impl Error {
+    pub fn is_conflict(&self) -> bool {
+        matches!(self, Error::Conflict)
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
