@@ -77,6 +77,13 @@ impl DbIter {
         self.merge.status()
     }
 
+    /// repositions at the first visible key >= `key` (still bounded by `upper`)
+    pub fn seek(&mut self, key: &[u8]) {
+        self.merge.seek(&make_ikey(key, self.snapshot.seq, ValueKind::Put));
+        self.skipping = false;
+        self.find_next();
+    }
+
     pub fn advance(&mut self) {
         if self.valid {
             self.merge.next();

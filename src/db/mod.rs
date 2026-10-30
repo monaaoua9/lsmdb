@@ -234,6 +234,15 @@ impl Db {
         self.snapshot().range(lower, upper)
     }
 
+    /// every key that starts with `prefix`
+    pub fn prefix(&self, prefix: &[u8]) -> Result<DbIter> {
+        self.snapshot().prefix(prefix)
+    }
+
+    pub fn first_key_value(&self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        self.iter()?.next().transpose()
+    }
+
     pub fn begin(&self) -> Transaction<'_> {
         Transaction::new(self)
     }
@@ -305,6 +314,24 @@ impl Snapshot {
     pub fn range(self, lower: Option<&[u8]>, upper: Option<&[u8]>) -> Result<DbIter> {
         DbIter::new(self, lower, upper)
     }
+
+    pub fn prefix(self, prefix: &[u8]) -> Result<DbIter> {
+        let upper = prefix_end(prefix);
+        DbIter::new(self, Some(prefix), upper.as_deref())
+    }
+}
+
+// smallest key greater than everything with this prefix; None if the prefix is all 0xff
+pub(crate) fn prefix_end(prefix: &[u8]) -> Option<Vec<u8>> {
+    let mut end = prefix.to_vec();
+    while let Some(last) = end.last_mut() {
+        if *last < 0xff {
+            *last += 1;
+            return Some(end);
+        }
+        end.pop();
+    }
+    None
 }
 
 impl Drop for Snapshot {
@@ -372,5 +399,18 @@ impl DbInner {
             Some(e) => Err(Error::Poisoned(e.to_string())),
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefix_end;
+
+    #[test]
+    fn prefix_end_cases() {
+        assert_eq!(prefix_end(b"abc"), Some(b"abd".to_vec()));
+        assert_eq!(prefix_end(b"ab\xff"), Some(b"ac".to_vec()));
+        assert_eq!(prefix_end(b"\xff\xff"), None);
+        assert_eq!(prefix_end(b""), None);
     }
 }
