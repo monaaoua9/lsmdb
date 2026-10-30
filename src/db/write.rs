@@ -65,6 +65,9 @@ impl DbInner {
     // becomes leader, takes everyone queued behind it, does one WAL append
     // and one fsync for the lot, then hands out results.
     pub(super) fn submit(&self, w: Writer) -> Result<()> {
+        if self.read_only {
+            return Err(Error::ReadOnly);
+        }
         self.check_bg_error()?;
         let w = Arc::new(w);
         let mut q = self.queue.lock().unwrap();
@@ -157,7 +160,8 @@ impl DbInner {
             m.wal_syncs.fetch_add(1, Ordering::Relaxed);
         }
         let wal_res = {
-            let mut wal = self.wal.lock().unwrap();
+            let mut guard = self.wal.lock().unwrap();
+            let wal = guard.as_mut().expect("writable db has a wal");
             wal.append(&rec).and_then(|_| if sync { wal.sync() } else { Ok(()) })
         };
         if let Err(e) = wal_res {
@@ -214,8 +218,10 @@ impl DbInner {
         {
             let mut wal = self.wal.lock().unwrap();
             // anything written with sync=false must be durable before its log is retired
-            wal.sync()?;
-            *wal = new_wal;
+            if let Some(old) = wal.as_mut() {
+                old.sync()?;
+            }
+            *wal = Some(new_wal);
         }
         s.imm = Some(std::mem::replace(&mut s.mem, Arc::new(MemTable::new())));
         s.imm_next_log = number;

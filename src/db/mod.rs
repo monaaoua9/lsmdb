@@ -48,7 +48,8 @@ pub(crate) struct DbInner {
     state_cv: Condvar,
     bg_cv: Condvar,
     versions: Mutex<VersionSet>,
-    wal: Mutex<LogWriter>,
+    wal: Mutex<Option<LogWriter>>,
+    read_only: bool,
     last_seq: AtomicU64,
     next_file: Arc<AtomicU64>,
     snapshots: Mutex<BTreeMap<SeqNo, usize>>,
@@ -134,6 +135,9 @@ impl Db {
     pub fn open(path: impl AsRef<Path>, opts: Options) -> Result<Db> {
         opts.validate()?;
         let dir = path.as_ref().to_path_buf();
+        if opts.read_only {
+            return Self::open_read_only(dir, opts);
+        }
         if opts.create_if_missing {
             fs::create_dir_all(&dir)?;
         }
@@ -204,7 +208,8 @@ impl Db {
             state_cv: Condvar::new(),
             bg_cv: Condvar::new(),
             versions: Mutex::new(vs),
-            wal: Mutex::new(wal),
+            wal: Mutex::new(Some(wal)),
+            read_only: false,
             last_seq: AtomicU64::new(max_seq),
             next_file,
             snapshots: Mutex::new(BTreeMap::new()),
@@ -226,6 +231,58 @@ impl Db {
                 .map_err(Error::from)?
         };
         Ok(Db { inner, bg: Mutex::new(Some(bg)) })
+    }
+
+    fn open_read_only(dir: PathBuf, opts: Options) -> Result<Db> {
+        // shared, so several readers can coexist while a writer is locked out
+        let lock = File::open(filename::lock_path(&dir))?;
+        lock.try_lock_shared().map_err(|_| Error::Locked)?;
+
+        let next_file = Arc::new(AtomicU64::new(2));
+        let cache = (opts.block_cache_bytes > 0).then(|| Arc::new(BlockCache::new(opts.block_cache_bytes)));
+        let vs = VersionSet::open(&dir, &opts, next_file.clone(), cache.clone())?;
+
+        let mut logs: Vec<u64> = fs::read_dir(&dir)?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| match filename::parse(&e.file_name().to_string_lossy()) {
+                FileKind::Log(n) if n >= vs.log_number() => Some(n),
+                _ => None,
+            })
+            .collect();
+        logs.sort_unstable();
+
+        let mem = MemTable::new();
+        let mut max_seq = vs.last_seq();
+        for n in logs {
+            let mut r = LogReader::open(&filename::log_path(&dir, n))?;
+            while let Some(rec) = r.read_record() {
+                max_seq = max_seq.max(replay_record(rec, |seq, kind, k, v| mem.add(seq, kind, k, v))?);
+            }
+        }
+
+        let version = vs.current();
+        let inner = Arc::new(DbInner {
+            dir,
+            opts,
+            state: Mutex::new(State { mem: Arc::new(mem), imm: None, imm_next_log: 0, version }),
+            state_cv: Condvar::new(),
+            bg_cv: Condvar::new(),
+            versions: Mutex::new(vs),
+            wal: Mutex::new(None),
+            read_only: true,
+            last_seq: AtomicU64::new(max_seq),
+            next_file,
+            snapshots: Mutex::new(BTreeMap::new()),
+            queue: Mutex::new(VecDeque::new()),
+            queue_cv: Condvar::new(),
+            compaction_lock: Mutex::new(()),
+            shutdown: AtomicBool::new(false),
+            bg_error: Mutex::new(None),
+            metrics: Metrics::default(),
+            cache,
+            lock_file: Mutex::new(Some(lock)),
+        });
+        Ok(Db { inner, bg: Mutex::new(None) })
     }
 
     pub fn put(&self, key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Result<()> {
@@ -394,6 +451,9 @@ impl Db {
     /// `dest` (which must not exist or be empty). tables are hard-linked when the
     /// filesystem allows it, so this is cheap; writes made while it runs may or may not be in
     pub fn checkpoint(&self, dest: impl AsRef<Path>) -> Result<()> {
+        if self.inner.read_only {
+            return Err(Error::ReadOnly);
+        }
         let dest = dest.as_ref();
         let existed = dest.exists();
         if existed && fs::read_dir(dest)?.next().is_some() {

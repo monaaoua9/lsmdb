@@ -36,6 +36,9 @@ impl fmt::Debug for CompactionFilter {
 pub struct Options {
     pub create_if_missing: bool,
     pub error_if_exists: bool,
+    /// replays the log in memory only, never writes to the directory and
+    /// rejects writes; coexists with other readers but not with a writer
+    pub read_only: bool,
     /// memtable is rotated once it holds about this many bytes
     pub write_buffer_size: usize,
     pub target_file_size: u64,
@@ -62,6 +65,7 @@ impl Default for Options {
         Options {
             create_if_missing: true,
             error_if_exists: false,
+            read_only: false,
             write_buffer_size: 16 << 20,
             target_file_size: 8 << 20,
             block_size: 4096,

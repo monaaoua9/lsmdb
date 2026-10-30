@@ -11,6 +11,8 @@ pub enum Error {
     Locked,
     /// the engine hit a fatal background/WAL error and is now read-only
     Poisoned(String),
+    /// a write was attempted on a database opened with `Options::read_only`
+    ReadOnly,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -39,6 +41,7 @@ impl fmt::Display for Error {
             Error::InvalidArgument(m) => write!(f, "invalid argument: {m}"),
             Error::Conflict => write!(f, "transaction conflict"),
             Error::Locked => write!(f, "database is locked"),
+            Error::ReadOnly => write!(f, "database was opened read-only"),
             Error::Poisoned(m) => write!(f, "database is read-only after fatal error: {m}"),
         }
     }

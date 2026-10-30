@@ -29,7 +29,7 @@ pub struct VersionSet {
     log_number: u64,
     last_seq: u64,
     current: Arc<Version>,
-    manifest: LogWriter,
+    manifest: Option<LogWriter>,
     manifest_number: u64,
     compact_ptr: Vec<Vec<u8>>,
 }
@@ -77,7 +77,7 @@ impl VersionSet {
                 last_seq = e.last_seq.unwrap_or(last_seq);
                 next = e.next_file.unwrap_or(next).max(next);
             }
-        } else if !opts.create_if_missing {
+        } else if !opts.create_if_missing || opts.read_only {
             return Err(Error::invalid("database does not exist"));
         }
 
@@ -99,6 +99,21 @@ impl VersionSet {
         }
         next_file.fetch_max(next, SeqCst);
 
+        if opts.read_only {
+            return Ok(VersionSet {
+                dir: dir.to_path_buf(),
+                verify: opts.verify_checksums,
+                cache,
+                next_file,
+                log_number,
+                last_seq,
+                current: Arc::new(Version { levels }),
+                manifest: None,
+                manifest_number: 0,
+                compact_ptr: vec![Vec::new(); NUM_LEVELS],
+            });
+        }
+
         let manifest_number = next_file.fetch_add(1, SeqCst);
         let manifest = Self::write_snapshot(dir, manifest_number, &levels, log_number, last_seq, &next_file)?;
         Ok(VersionSet {
@@ -109,7 +124,7 @@ impl VersionSet {
             log_number,
             last_seq,
             current: Arc::new(Version { levels }),
-            manifest,
+            manifest: Some(manifest),
             manifest_number,
             compact_ptr: vec![Vec::new(); NUM_LEVELS],
         })
@@ -235,8 +250,9 @@ impl VersionSet {
             sort_level(i, files);
         }
 
-        self.manifest.append(&edit.encode())?;
-        self.manifest.sync()?;
+        let manifest = self.manifest.as_mut().ok_or(Error::ReadOnly)?;
+        manifest.append(&edit.encode())?;
+        manifest.sync()?;
 
         for (_, num) in &edit.deleted {
             if !readded(*num) {
