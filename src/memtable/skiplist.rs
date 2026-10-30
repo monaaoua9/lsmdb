@@ -94,6 +94,36 @@ impl SkipList {
         }
     }
 
+    // last node strictly below target, null if there is none
+    fn find_lt(&self, target: &[u8]) -> *mut Node {
+        let mut x = self.head;
+        let mut level = self.height.load(Acquire) - 1;
+        loop {
+            let (p, _) = self.scan(x, level, target);
+            if level == 0 {
+                return if p == self.head { ptr::null_mut() } else { p };
+            }
+            x = p;
+            level -= 1;
+        }
+    }
+
+    fn find_last(&self) -> *mut Node {
+        let mut x = self.head;
+        let mut level = self.height.load(Acquire) - 1;
+        loop {
+            // SAFETY: x is head or a published node
+            let n = unsafe { (*x).next[level].load(Acquire) };
+            if !n.is_null() {
+                x = n;
+            } else if level == 0 {
+                return if x == self.head { ptr::null_mut() } else { x };
+            } else {
+                level -= 1;
+            }
+        }
+    }
+
     pub fn insert(&self, key: Box<[u8]>, value: Box<[u8]>) {
         let h = self.random_height();
         let node = Node::alloc(key, value, h);
@@ -185,6 +215,17 @@ impl SkipIter {
         self.node = self.list.find_ge(target);
     }
 
+    pub fn seek_to_last(&mut self) {
+        self.node = self.list.find_last();
+    }
+
+    pub fn prev(&mut self) {
+        debug_assert!(self.valid());
+        // SAFETY: valid() checked by caller
+        let key = unsafe { &(*self.node).key };
+        self.node = self.list.find_lt(key);
+    }
+
     pub fn next(&mut self) {
         debug_assert!(self.valid());
         // SAFETY: valid() checked by caller
@@ -229,6 +270,33 @@ mod tests {
         sorted.sort_by(|a, b| cmp_ikey(a, b));
         assert_eq!(seen, sorted);
         assert_eq!(seen.len(), 5);
+    }
+
+    #[test]
+    fn walks_backwards() {
+        let l = Arc::new(SkipList::new());
+        for i in [5u32, 1, 9, 3, 7] {
+            l.insert(ik(i, 1), Box::new([]));
+        }
+        let mut it = SkipIter::new(l);
+        it.seek_to_last();
+        let mut seen = Vec::new();
+        while it.valid() {
+            seen.push(it.key().to_vec());
+            it.prev();
+        }
+        assert_eq!(seen, [9u32, 7, 5, 3, 1].map(|i| ik(i, 1).to_vec()));
+
+        it.seek(&ik(4, 1));
+        it.prev();
+        assert_eq!(it.key(), &ik(3, 1)[..]);
+    }
+
+    #[test]
+    fn empty_list_has_no_last() {
+        let mut it = SkipIter::new(Arc::new(SkipList::new()));
+        it.seek_to_last();
+        assert!(!it.valid());
     }
 
     #[test]

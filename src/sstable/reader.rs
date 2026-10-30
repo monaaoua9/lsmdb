@@ -182,6 +182,34 @@ impl TableIterator {
     }
 }
 
+impl TableIterator {
+    fn skip_empty_backward(&mut self) {
+        loop {
+            match &self.data {
+                Some(d) if d.valid() => return,
+                Some(d) => {
+                    if let Err(e) = d.status() {
+                        self.err = Some(e);
+                        self.data = None;
+                        return;
+                    }
+                }
+                None if self.err.is_some() => return,
+                None => {}
+            }
+            if !self.index.valid() {
+                self.data = None;
+                return;
+            }
+            self.index.prev();
+            self.open_data_block();
+            if let Some(d) = &mut self.data {
+                d.seek_to_last();
+            }
+        }
+    }
+}
+
 impl InternalIterator for TableIterator {
     fn valid(&self) -> bool {
         self.data.as_ref().is_some_and(|d| d.valid())
@@ -194,6 +222,22 @@ impl InternalIterator for TableIterator {
             d.seek_to_first();
         }
         self.skip_empty_forward();
+    }
+
+    fn seek_to_last(&mut self) {
+        self.index.seek_to_last();
+        self.open_data_block();
+        if let Some(d) = &mut self.data {
+            d.seek_to_last();
+        }
+        self.skip_empty_backward();
+    }
+
+    fn prev(&mut self) {
+        if let Some(d) = &mut self.data {
+            d.prev();
+        }
+        self.skip_empty_backward();
     }
 
     fn seek(&mut self, target: &[u8]) {

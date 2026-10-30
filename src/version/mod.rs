@@ -193,6 +193,27 @@ impl LevelIterator {
     }
 }
 
+impl LevelIterator {
+    fn skip_backward(&mut self) {
+        while self.err.is_none() && !self.cur.as_ref().is_some_and(|c| c.valid()) {
+            if let Some(c) = &self.cur {
+                if let Err(e) = c.status() {
+                    self.err = Some(e);
+                    return;
+                }
+            }
+            if self.idx == 0 {
+                self.cur = None;
+                return;
+            }
+            self.open(self.idx - 1);
+            if let Some(c) = &mut self.cur {
+                c.seek_to_last();
+            }
+        }
+    }
+}
+
 impl InternalIterator for LevelIterator {
     fn valid(&self) -> bool {
         self.cur.as_ref().is_some_and(|c| c.valid())
@@ -204,6 +225,25 @@ impl InternalIterator for LevelIterator {
             c.seek_to_first();
         }
         self.skip_forward();
+    }
+
+    fn seek_to_last(&mut self) {
+        if self.files.is_empty() {
+            self.cur = None;
+            return;
+        }
+        self.open(self.files.len() - 1);
+        if let Some(c) = &mut self.cur {
+            c.seek_to_last();
+        }
+        self.skip_backward();
+    }
+
+    fn prev(&mut self) {
+        if let Some(c) = &mut self.cur {
+            c.prev();
+        }
+        self.skip_backward();
     }
 
     fn seek(&mut self, target: &[u8]) {

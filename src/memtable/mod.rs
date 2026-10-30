@@ -72,12 +72,20 @@ impl InternalIterator for MemTableIter {
         self.0.seek_to_first();
     }
 
+    fn seek_to_last(&mut self) {
+        self.0.seek_to_last();
+    }
+
     fn seek(&mut self, target: &[u8]) {
         self.0.seek(target);
     }
 
     fn next(&mut self) {
         self.0.next();
+    }
+
+    fn prev(&mut self) {
+        self.0.prev();
     }
 
     fn key(&self) -> &[u8] {

@@ -116,6 +116,7 @@ impl Block {
             key: Vec::new(),
             voff: 0,
             vlen: 0,
+            cur_off: 0,
             next_off: 0,
             valid: false,
             err: None,
@@ -128,6 +129,8 @@ pub struct BlockIter {
     key: Vec<u8>,
     voff: usize,
     vlen: usize,
+    // where the current entry starts; prev() needs it to find the entry before
+    cur_off: usize,
     next_off: usize,
     valid: bool,
     err: Option<Error>,
@@ -145,6 +148,7 @@ impl BlockIter {
             self.valid = false;
             return;
         }
+        self.cur_off = self.next_off;
         let src = &self.block.data()[self.next_off..limit];
         let Some((shared, n1)) = get_varint32(src) else { return self.fail() };
         let Some((unshared, n2)) = get_varint32(&src[n1..]) else { return self.fail() };
@@ -191,6 +195,41 @@ impl InternalIterator for BlockIter {
     fn seek_to_first(&mut self) {
         self.seek_to_restart(0);
         self.parse_next();
+    }
+
+    fn seek_to_last(&mut self) {
+        self.seek_to_restart(self.block.n_restarts - 1);
+        loop {
+            self.parse_next();
+            if !self.valid || self.next_off >= self.block.restarts_off {
+                break;
+            }
+        }
+    }
+
+    fn prev(&mut self) {
+        let original = self.cur_off;
+        // number of restart points strictly before the current entry
+        let (mut lo, mut hi) = (0, self.block.n_restarts);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.block.restart_point(mid) < original {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo == 0 {
+            self.valid = false;
+            return;
+        }
+        self.seek_to_restart(lo - 1);
+        loop {
+            self.parse_next();
+            if !self.valid || self.next_off >= original {
+                break;
+            }
+        }
     }
 
     fn seek(&mut self, target: &[u8]) {
@@ -260,6 +299,42 @@ mod tests {
         }
         assert!(!it.valid());
         assert!(it.status().is_ok());
+    }
+
+    #[test]
+    fn reverse_scan_all() {
+        for interval in [1, 3, 16] {
+            let blk = build(100, interval);
+            let mut it = blk.iter();
+            it.seek_to_last();
+            for i in (0..100).rev() {
+                assert!(it.valid(), "interval {interval} at {i}");
+                assert_eq!(it.value(), format!("v{i}").as_bytes());
+                it.prev();
+            }
+            assert!(!it.valid());
+            assert!(it.status().is_ok());
+        }
+    }
+
+    #[test]
+    fn prev_after_seek_and_direction_flips() {
+        let blk = build(50, 4);
+        let mut it = blk.iter();
+        it.seek(&make_ikey(b"key00020", 1, ValueKind::Put));
+        assert_eq!(it.value(), b"v20");
+        it.prev();
+        assert_eq!(it.value(), b"v19");
+        it.next();
+        it.next();
+        assert_eq!(it.value(), b"v21");
+        it.prev();
+        it.prev();
+        assert_eq!(it.value(), b"v19");
+
+        it.seek_to_first();
+        it.prev();
+        assert!(!it.valid());
     }
 
     #[test]
