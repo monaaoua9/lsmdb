@@ -202,8 +202,26 @@ impl Db {
         Ok(self.inner.get_at(key, seq)?.and_then(|h| h.value))
     }
 
+    pub fn contains_key(&self, key: &[u8]) -> Result<bool> {
+        Ok(self.get(key)?.is_some())
+    }
+
+    /// all keys are read at one sequence number, so the answers are mutually consistent
+    pub fn get_many(&self, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>> {
+        let seq = self.inner.last_seq.load(Ordering::Acquire);
+        keys.iter().map(|k| Ok(self.inner.get_at(k, seq)?.and_then(|h| h.value))).collect()
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         self.inner.acquire_snapshot()
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.inner.dir
+    }
+
+    pub fn options(&self) -> &Options {
+        &self.inner.opts
     }
 
     /// full scan at the current sequence number
@@ -274,6 +292,14 @@ impl Snapshot {
 
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         Ok(self.inner.get_at(key, self.seq)?.and_then(|h| h.value))
+    }
+
+    pub fn contains_key(&self, key: &[u8]) -> Result<bool> {
+        Ok(self.get(key)?.is_some())
+    }
+
+    pub fn get_many(&self, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>> {
+        keys.iter().map(|k| self.get(k)).collect()
     }
 
     pub fn range(self, lower: Option<&[u8]>, upper: Option<&[u8]>) -> Result<DbIter> {

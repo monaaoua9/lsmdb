@@ -171,3 +171,23 @@ fn big_values() {
     assert_eq!(db.get(b"big").unwrap().unwrap(), big);
     assert_eq!(db.get(b"small").unwrap().unwrap(), b"s");
 }
+
+#[test]
+fn contains_and_get_many() {
+    let d = tempfile::tempdir().unwrap();
+    let db = open(d.path());
+    db.put("a", "1").unwrap();
+    db.put("c", "3").unwrap();
+    db.delete("c").unwrap();
+    assert!(db.contains_key(b"a").unwrap());
+    assert!(!db.contains_key(b"c").unwrap());
+
+    let got = db.get_many(&[b"a", b"b", b"c"]).unwrap();
+    assert_eq!(got, vec![Some(b"1".to_vec()), None, None]);
+
+    let snap = db.snapshot();
+    db.put("a", "2").unwrap();
+    assert_eq!(snap.get_many(&[b"a"]).unwrap()[0].as_deref(), Some(&b"1"[..]));
+    assert!(snap.contains_key(b"a").unwrap());
+    assert_eq!(db.path(), d.path());
+}
