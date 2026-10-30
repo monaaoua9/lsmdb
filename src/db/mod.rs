@@ -27,7 +27,7 @@ use crate::{
     wal::{LogReader, LogWriter},
 };
 
-pub use iter::DbIter;
+pub use iter::{DbIter, RevIter};
 pub use txn::{Transaction, TxnIter};
 use write::Writer;
 
@@ -288,6 +288,15 @@ impl Db {
     /// every key that starts with `prefix`
     pub fn prefix(&self, prefix: &[u8]) -> Result<DbIter> {
         self.snapshot().prefix(prefix)
+    }
+
+    pub fn last_key_value(&self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let mut it = self.iter()?;
+        it.seek_to_last();
+        if it.valid() {
+            return Ok(Some((it.key().to_vec(), it.value().to_vec())));
+        }
+        it.status().map(|_| None)
     }
 
     pub fn first_key_value(&self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
